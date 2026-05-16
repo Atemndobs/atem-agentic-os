@@ -1,0 +1,13 @@
+{
+  "name": "atem-agentic-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first session routing CLI",
+  "type": "commonjs",
+  "bin": {
+    "atem": "bin/atem.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
