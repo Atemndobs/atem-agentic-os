@@ -213,6 +213,33 @@ function defaultProviderContract() {
   return `# ATEM Provider Contract\n\nATEM provides session handoff for AI coding agents, backed by Git-readable files.\n\n## Core Contract\n\nBefore working:\n1. Read the active session files.\n2. Respect the target repository boundary.\n3. Preserve existing decisions and scope.\n\nWhile working:\n1. Keep changes narrow.\n2. Record important decisions.\n3. Record validation commands and results.\n4. Do not rely on chat memory alone.\n\nBefore stopping:\n1. Update \`handoff.md\`.\n2. Update \`state.md\`.\n3. Update \`next.md\`.\n4. Update \`validation.md\`.\n5. Update \`decisions.md\` if decisions changed.\n6. Append a short entry to \`log.md\`.\n\nNever end a provider session without updating \`handoff.md\`.\n\n## Repository Boundary\nOnly work inside the target repository unless explicitly instructed otherwise.\nDo not modify sibling repositories, sibling worktrees, or unrelated checkouts.\n\n## Provider-Neutral Rule\nThis contract applies to:\n- Claude Code\n- Codex\n- Cursor\n- OpenCode\n- OpenRouter\n- local models\n- manual human sessions\n`;
 }
 
+function buildFrontmatter(fields) {
+  const lines = ['---'];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === '') continue;
+    lines.push(`${key}: ${value}`);
+  }
+  lines.push('---', '');
+  return lines.join('\n');
+}
+
+function parseFrontmatter(content) {
+  if (!content.startsWith('---\n')) return { data: {}, body: content };
+  const end = content.indexOf('\n---\n', 4);
+  if (end === -1) return { data: {}, body: content };
+  const block = content.slice(4, end);
+  const body = content.slice(end + 5);
+  const data = {};
+  for (const line of block.split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    const val = line.slice(idx + 1).trim();
+    if (key) data[key] = val;
+  }
+  return { data, body };
+}
+
 function createSessionTemplates(taskId, title, options = {}) {
   const stamp = nowStamp();
   const taskType = normalizeTaskType(options.taskType || DEFAULT_TASK_TYPE);
@@ -220,9 +247,24 @@ function createSessionTemplates(taskId, title, options = {}) {
   const targetRepository = options.targetRepository || '';
   const targetRepoSection = targetRepository ? `\n## Target Repository\n${targetRepository}\n` : '';
 
+  const briefFm = buildFrontmatter({
+    task_id: taskId,
+    task_type: taskType,
+    schema: 'atem.session.v1',
+  });
+  const stateFm = buildFrontmatter({
+    task_id: taskId,
+    task_type: taskType,
+    status: 'active',
+    provider: 'manual',
+    repo: primaryRepository,
+    target_repo: targetRepository,
+    schema: 'atem.session.v1',
+  });
+
   return {
-    'brief.md': `# Task Brief\n\n## Task ID\n${taskId}\n\n## Title\n${title}\n\n## Task Type\n${taskType}\n\n## Goal\n${title}\n\n## Scope\n- Make the smallest useful progress toward the goal.\n\n## Out of Scope\n- Unrelated refactors.\n\n## Constraints\n- Keep changes reviewable and local-first.\n`,
-    'state.md': `# Session State\n\n## Status\nactive\n\n## Current Provider\nmanual\n\n## Task Type\n${taskType}\n\n## Current Summary\nTask started. No implementation yet.\n\n## Primary Repository\n${primaryRepository}${targetRepoSection}\n## Related Workspaces\nNone detected.\n\n## Files Touched\nNone yet.\n\n## Known Issues\nNone yet.\n\n## Last Updated\n${stamp}\n`,
+    'brief.md': `${briefFm}# Task Brief\n\n## Task ID\n${taskId}\n\n## Title\n${title}\n\n## Task Type\n${taskType}\n\n## Goal\n${title}\n\n## Scope\n- Make the smallest useful progress toward the goal.\n\n## Out of Scope\n- Unrelated refactors.\n\n## Constraints\n- Keep changes reviewable and local-first.\n`,
+    'state.md': `${stateFm}# Session State\n\n## Status\nactive\n\n## Current Provider\nmanual\n\n## Task Type\n${taskType}\n\n## Current Summary\nTask started. No implementation yet.\n\n## Primary Repository\n${primaryRepository}${targetRepoSection}\n## Related Workspaces\nNone detected.\n\n## Files Touched\nNone yet.\n\n## Known Issues\nNone yet.\n\n## Last Updated\n${stamp}\n`,
     'handoff.md': `# Handoff\n\n## Task\n${taskId} - ${title}\n\n## Goal\n${title}\n\n## Current Status\nNo implementation yet.\n\n## What Was Done\nCreated session files.\n\n## Files Touched\nNone yet.\n\n## Decisions\nNone yet.\n\n## Validation\nNo validation run yet.\n\n## Next Recommended Action\nRead session files and start the smallest useful step.\n\n## Previous Provider\nNone\n\n## Next Suggested Provider\nmanual\n\n## Reason for Suggested Provider\nDefault start provider.\n`,
     'decisions.md': `# Decisions\n\n## Decision Log\n\n### ${stamp}\n- Decision: Session created.\n- Reason: Start task tracking.\n- Impact: Provider handoff can begin.\n`,
     'next.md': `# Next Actions\n\n1. Read the relevant project files.\n2. Identify the smallest useful change.\n3. Implement and validate that change.\n4. Update handoff.md before stopping.\n`,
@@ -1374,8 +1416,15 @@ function commandDoctor(gitRoot) {
 
   const brief = readFile(path.join(sessionDir, 'brief.md'));
   const state = readFile(path.join(sessionDir, 'state.md'));
-  const briefTaskType = normalizeTaskType(getSection(brief, 'Task Type'));
-  const stateTaskType = normalizeTaskType(getSection(state, 'Task Type'));
+  const briefFm = parseFrontmatter(brief).data;
+  const stateFm = parseFrontmatter(state).data;
+  const briefTaskType = normalizeTaskType(briefFm.task_type || getSection(brief, 'Task Type'));
+  const stateTaskType = normalizeTaskType(stateFm.task_type || getSection(state, 'Task Type'));
+  if (briefFm.schema || stateFm.schema) {
+    report('OK', `schema: ${stateFm.schema || briefFm.schema}`);
+  } else {
+    report('WARN', 'no frontmatter schema — run `atem migrate-tasks` to upgrade');
+  }
   if (isValidTaskType(briefTaskType) && isValidTaskType(stateTaskType)) {
     report('OK', `task type is valid: ${stateTaskType}`);
     if (briefTaskType !== stateTaskType) {
@@ -1511,6 +1560,29 @@ function commandMigrateTasks(gitRoot, args) {
     if (typeMismatch) {
       state = setSection(state, 'Task Type', resolvedType);
       notes.push(`state Task Type aligned to brief (${resolvedType})`);
+    }
+
+    const briefHasFm = parseFrontmatter(brief).data.schema;
+    const stateHasFm = parseFrontmatter(state).data.schema;
+    if (!briefHasFm) {
+      brief = buildFrontmatter({ task_id: taskId, task_type: resolvedType, schema: 'atem.session.v1' }) + brief;
+      notes.push('added brief frontmatter');
+    }
+    if (!stateHasFm) {
+      const status = getSection(state, 'Status') || 'active';
+      const provider = getSection(state, 'Current Provider') || 'manual';
+      const primary = getSection(state, 'Primary Repository') || '';
+      const target = getSection(state, 'Target Repository') || '';
+      state = buildFrontmatter({
+        task_id: taskId,
+        task_type: resolvedType,
+        status,
+        provider,
+        repo: primary,
+        target_repo: target,
+        schema: 'atem.session.v1',
+      }) + state;
+      notes.push('added state frontmatter');
     }
 
     const primary = getSection(state, 'Primary Repository');
