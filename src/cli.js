@@ -1503,6 +1503,55 @@ function commandDoctor(gitRoot) {
   }
 }
 
+function commandAdapter(args) {
+  const usage = 'Usage: atem adapter <provider> <read|update|log|decision|validation|touched> <task-id> [...]';
+  const [provider, verb, taskId, ...rest] = args;
+  if (!provider || !verb || !taskId) throw new Error(usage);
+  // Lazy require to avoid circular load while cli.js is still initializing.
+  const registry = require('./adapters');
+  const adapter = registry.get(provider);
+  switch (verb) {
+    case 'read': {
+      console.log(JSON.stringify(adapter.read(taskId), null, 2));
+      return;
+    }
+    case 'update': {
+      // rest as key=value pairs
+      const patch = {};
+      for (const kv of rest) {
+        const idx = kv.indexOf('=');
+        if (idx === -1) throw new Error(`Bad patch entry: ${kv} (expected key=value)`);
+        patch[kv.slice(0, idx)] = kv.slice(idx + 1);
+      }
+      console.log(JSON.stringify(adapter.update(taskId, patch), null, 2));
+      return;
+    }
+    case 'log': {
+      adapter.log(taskId, rest.join(' '));
+      console.log('logged');
+      return;
+    }
+    case 'decision': {
+      const payload = { decision: rest.join(' ') };
+      adapter.decision(taskId, payload);
+      console.log('decision recorded');
+      return;
+    }
+    case 'validation': {
+      adapter.validation(taskId, { command: rest.join(' '), result: 'pending' });
+      console.log('validation recorded');
+      return;
+    }
+    case 'touched': {
+      adapter.touched(taskId, rest);
+      console.log('files touched recorded');
+      return;
+    }
+    default:
+      throw new Error(usage);
+  }
+}
+
 function commandMigrateTasks(gitRoot, args) {
   const dryRun = hasFlag(args, '--dry-run');
   const paths = resolveActivePaths(gitRoot);
@@ -2793,6 +2842,9 @@ function main(argv) {
       case 'integrate':
         commandIntegrate(args);
         break;
+      case 'adapter':
+        commandAdapter(args);
+        break;
       default:
         throw new Error(`Unknown command: ${command}`);
     }
@@ -2805,4 +2857,21 @@ function main(argv) {
 module.exports = {
   main,
   buildHandoffPrompt,
+  // Re-exports for adapters (Workstream 3)
+  resolveActivePaths,
+  requireSession,
+  getSessionFileMap,
+  readFile,
+  writeFile,
+  getSection,
+  setSection,
+  appendLog,
+  parseFrontmatter,
+  buildFrontmatter,
+  nowStamp,
+  normalizeTaskType,
+  isValidTaskType,
+  PROVIDERS,
+  TASK_TYPES,
+  findGitRoot,
 };
