@@ -1603,6 +1603,95 @@ function commandArchive(gitRoot, args) {
   console.log(`Archived ${taskId}`);
 }
 
+function listSnapshots(sessionDir) {
+  const snapsDir = path.join(sessionDir, 'snapshots');
+  if (!fs.existsSync(snapsDir)) return [];
+  return fs.readdirSync(snapsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+}
+
+function readSnapshotMeta(snapshotDir) {
+  const statePath = path.join(snapshotDir, 'state.md');
+  const state = fs.existsSync(statePath) ? readFile(statePath) : '';
+  const fm = parseFrontmatter(state).data;
+  const gitStatusPath = path.join(snapshotDir, 'git-status.txt');
+  const gitStatus = fs.existsSync(gitStatusPath) ? readFile(gitStatusPath) : '';
+  const diffStatPath = path.join(snapshotDir, 'git-diff-summary.txt');
+  const diffStat = fs.existsSync(diffStatPath) ? readFile(diffStatPath) : '';
+  return {
+    provider: fm.provider || getSection(state, 'Current Provider') || 'unknown',
+    status: fm.status || getSection(state, 'Status') || 'unknown',
+    taskType: fm.task_type || getSection(state, 'Task Type') || 'unknown',
+    summary: getSection(state, 'Current Summary') || '',
+    filesTouched: getSection(state, 'Files Touched') || '',
+    gitStatus: gitStatus.trim(),
+    diffStat: diffStat.trim(),
+  };
+}
+
+function parseGitStatusFiles(gitStatus) {
+  return gitStatus.split('\n')
+    .filter((l) => l && !l.startsWith('##'))
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
+}
+
+function commandSnapshotDiff(gitRoot, args) {
+  const taskId = args.find((a) => /^TASK-\d+$/.test(a));
+  if (!taskId) throw new Error('Usage: atem snapshot-diff <task-id> [<snap-a> <snap-b>]');
+  const paths = resolveActivePaths(gitRoot);
+  const sessionDir = requireSession(paths, taskId);
+  const all = listSnapshots(sessionDir);
+  if (all.length < 2) {
+    console.log(`Need at least 2 snapshots for ${taskId} (have ${all.length}).`);
+    return;
+  }
+  const stamps = args.filter((a) => !/^TASK-\d+$/.test(a) && !a.startsWith('--'));
+  const a = stamps[0] || all[all.length - 2];
+  const b = stamps[1] || all[all.length - 1];
+  const aDir = path.join(sessionDir, 'snapshots', a);
+  const bDir = path.join(sessionDir, 'snapshots', b);
+  if (!fs.existsSync(aDir)) throw new Error(`Snapshot not found: ${a}`);
+  if (!fs.existsSync(bDir)) throw new Error(`Snapshot not found: ${b}`);
+
+  const am = readSnapshotMeta(aDir);
+  const bm = readSnapshotMeta(bDir);
+
+  const aFiles = new Set(parseGitStatusFiles(am.gitStatus));
+  const bFiles = new Set(parseGitStatusFiles(bm.gitStatus));
+  const newFiles = [...bFiles].filter((f) => !aFiles.has(f));
+  const droppedFiles = [...aFiles].filter((f) => !bFiles.has(f));
+
+  const lines = [];
+  lines.push(`# Snapshot Diff: ${taskId}`);
+  lines.push(`From: ${a}`);
+  lines.push(`To:   ${b}`);
+  lines.push('');
+  lines.push('## Provider Transition');
+  lines.push(am.provider === bm.provider ? `(unchanged) ${am.provider}` : `${am.provider} → ${bm.provider}`);
+  lines.push('');
+  lines.push('## Status Transition');
+  lines.push(am.status === bm.status ? `(unchanged) ${am.status}` : `${am.status} → ${bm.status}`);
+  lines.push('');
+  lines.push('## Working-Tree Files (git status)');
+  lines.push(`- Files in A: ${aFiles.size}`);
+  lines.push(`- Files in B: ${bFiles.size}`);
+  if (newFiles.length) lines.push(`- New in B:\n${newFiles.map((f) => `  - ${f}`).join('\n')}`);
+  if (droppedFiles.length) lines.push(`- Dropped in B:\n${droppedFiles.map((f) => `  - ${f}`).join('\n')}`);
+  lines.push('');
+  lines.push('## Diff Stat (B)');
+  lines.push(bm.diffStat || '(empty)');
+  lines.push('');
+  if (am.summary || bm.summary) {
+    lines.push('## Current Summary');
+    lines.push(`A: ${am.summary || '(none)'}`);
+    lines.push(`B: ${bm.summary || '(none)'}`);
+  }
+  console.log(lines.join('\n'));
+}
+
 function commandRepos(args) {
   const usage = 'Usage: atem repos <task-id> <list|add> [path]';
   const [taskId, verb, repoPath] = args;
@@ -2977,6 +3066,9 @@ function main(argv) {
         break;
       case 'repos':
         commandRepos(args);
+        break;
+      case 'snapshot-diff':
+        commandSnapshotDiff(gitRoot, args);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
