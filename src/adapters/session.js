@@ -123,6 +123,39 @@ function recordValidation(taskId, { command, result, failure = '' }) {
   logEvent(taskId, `Validation: ${command} → ${result || 'unspecified'}`);
 }
 
+function listRepos(taskId) {
+  const { files } = locate(taskId);
+  const state = fs.existsSync(files.state) ? readFile(files.state) : '';
+  const fm = parseFrontmatter(state).data;
+  const fromFm = fm.repos ? fm.repos.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  // Always include primary/target if not already present.
+  const extras = [fm.repo, fm.target_repo].filter((r) => r && r !== 'unknown');
+  const merged = [];
+  for (const r of [...fromFm, ...extras]) {
+    if (r && !merged.includes(r)) merged.push(r);
+  }
+  return merged;
+}
+
+function addRepo(taskId, repoPath) {
+  if (!repoPath) throw new Error('addRepo requires a path');
+  const resolved = require('node:path').resolve(repoPath);
+  const { files } = locate(taskId);
+  let state = readFile(files.state);
+  const { data, body } = parseFrontmatter(state);
+  const current = data.repos ? data.repos.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  if (!current.includes(resolved)) current.push(resolved);
+  data.repos = current.join(',');
+  state = buildFrontmatter(data) + body;
+
+  // Mirror to human-readable section.
+  const section = current.map((r) => `- ${r}`).join('\n') || 'None.';
+  state = setSection(state, 'Related Repositories', section);
+  state = setSection(state, 'Last Updated', nowStamp());
+  writeFile(files.state, state);
+  return listRepos(taskId);
+}
+
 function markFilesTouched(taskId, filesTouched) {
   if (!Array.isArray(filesTouched) || filesTouched.length === 0) return;
   const { files } = locate(taskId);
@@ -148,4 +181,6 @@ module.exports = {
   recordDecision,
   recordValidation,
   markFilesTouched,
+  listRepos,
+  addRepo,
 };

@@ -1464,6 +1464,16 @@ function commandDoctor(gitRoot) {
     }
   }
 
+  const extraRepos = stateFm.repos ? stateFm.repos.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  if (extraRepos.length > 0) {
+    const missing = extraRepos.filter((r) => !fs.existsSync(r));
+    if (missing.length === 0) {
+      report('OK', `multi-repo set (${extraRepos.length}) all exist`);
+    } else {
+      report('WARN', `multi-repo set has ${missing.length} missing path(s): ${missing.join(', ')}`);
+    }
+  }
+
   const activeProvidersSectionCount = sectionCount(state, 'Active Providers');
   if (activeProvidersSectionCount === 1) {
     report('OK', 'single `## Active Providers` section');
@@ -1591,6 +1601,33 @@ function commandArchive(gitRoot, args) {
   }
   archiveOneSession(paths, taskId);
   console.log(`Archived ${taskId}`);
+}
+
+function commandRepos(args) {
+  const usage = 'Usage: atem repos <task-id> <list|add> [path]';
+  const [taskId, verb, repoPath] = args;
+  if (!taskId || !verb) throw new Error(usage);
+  const session = require('./adapters/session.js');
+  if (verb === 'list') {
+    const repos = session.listRepos(taskId);
+    if (repos.length === 0) {
+      console.log('(no repos)');
+    } else {
+      for (const r of repos) {
+        const exists = fs.existsSync(r) ? 'ok ' : 'MISSING';
+        console.log(`[${exists}] ${r}`);
+      }
+    }
+    return;
+  }
+  if (verb === 'add') {
+    if (!repoPath) throw new Error('Usage: atem repos <task-id> add <path>');
+    const repos = session.addRepo(taskId, repoPath);
+    console.log(`Repos for ${taskId}:`);
+    for (const r of repos) console.log(`- ${r}`);
+    return;
+  }
+  throw new Error(usage);
 }
 
 function commandAdapter(args) {
@@ -2937,6 +2974,9 @@ function main(argv) {
         break;
       case 'archive':
         commandArchive(gitRoot, args);
+        break;
+      case 'repos':
+        commandRepos(args);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
