@@ -1503,6 +1503,96 @@ function commandDoctor(gitRoot) {
   }
 }
 
+function archiveOneSession(paths, taskId) {
+  const sessionDir = path.join(paths.sessionsDir, taskId);
+  if (!fs.existsSync(sessionDir)) throw new Error(`Session does not exist: ${taskId}`);
+  const archiveDir = path.join(paths.sessionsDir, '_archive');
+  ensureDir(archiveDir);
+  const dest = path.join(archiveDir, taskId);
+  if (fs.existsSync(dest)) throw new Error(`Already archived: ${taskId}`);
+
+  // Stamp status=archived in state.md frontmatter + section before moving.
+  const statePath = path.join(sessionDir, 'state.md');
+  if (fs.existsSync(statePath)) {
+    let state = readFile(statePath);
+    const { data, body } = parseFrontmatter(state);
+    data.status = 'archived';
+    state = buildFrontmatter(data) + body;
+    state = setSection(state, 'Status', 'archived');
+    state = setSection(state, 'Last Updated', nowStamp());
+    writeFile(statePath, state);
+  }
+  const logPath = path.join(sessionDir, 'log.md');
+  if (fs.existsSync(logPath)) {
+    writeFile(logPath, appendLog(readFile(logPath), 'Session archived.'));
+  }
+
+  fs.renameSync(sessionDir, dest);
+
+  // If this was the active session, clear current-session.md.
+  if (fs.existsSync(paths.currentSessionFile)) {
+    let cur = readFile(paths.currentSessionFile);
+    if (getSection(cur, 'Active Task ID') === taskId) {
+      cur = setSection(cur, 'Active Task ID', 'None');
+      cur = setSection(cur, 'Current Provider', 'manual');
+      cur = setSection(cur, 'Last Updated', nowStamp());
+      writeFile(paths.currentSessionFile, cur);
+    }
+  }
+}
+
+function findBrokenSessions(paths) {
+  const ids = fs.readdirSync(paths.sessionsDir)
+    .filter((n) => /^TASK-\d+$/.test(n))
+    .sort();
+  const broken = [];
+  for (const id of ids) {
+    const statePath = path.join(paths.sessionsDir, id, 'state.md');
+    if (!fs.existsSync(statePath)) continue;
+    const state = readFile(statePath);
+    const fm = parseFrontmatter(state).data;
+    const primary = fm.repo || getSection(state, 'Primary Repository');
+    const target = fm.target_repo || getSection(state, 'Target Repository');
+    const repo = (target && target !== 'unknown') ? target
+      : (primary && primary !== 'unknown') ? primary : '';
+    if (repo && !fs.existsSync(repo)) broken.push({ id, repo });
+  }
+  return broken;
+}
+
+function commandArchive(gitRoot, args) {
+  const paths = resolveActivePaths(gitRoot);
+  ensureHarnessReady(paths);
+  const dryRun = hasFlag(args, '--dry-run');
+  const broken = hasFlag(args, '--broken');
+  if (broken) {
+    const items = findBrokenSessions(paths);
+    if (items.length === 0) {
+      console.log('No broken-repo sessions found.');
+      return;
+    }
+    console.log(`${PRODUCT_NAME} archive --broken${dryRun ? ' (dry-run)' : ''}`);
+    for (const { id, repo } of items) {
+      if (dryRun) {
+        console.log(`[would-archive] ${id} (repo missing: ${repo})`);
+      } else {
+        archiveOneSession(paths, id);
+        console.log(`[archived]     ${id}`);
+      }
+    }
+    console.log(`Summary: ${items.length} ${dryRun ? 'candidates' : 'archived'}`);
+    return;
+  }
+  const taskId = args.find((a) => /^TASK-\d+$/.test(a));
+  if (!taskId) throw new Error('Usage: atem archive <task-id> | atem archive --broken [--dry-run]');
+  if (dryRun) {
+    console.log(`[would-archive] ${taskId}`);
+    return;
+  }
+  archiveOneSession(paths, taskId);
+  console.log(`Archived ${taskId}`);
+}
+
 function commandAdapter(args) {
   const usage = 'Usage: atem adapter <provider> <read|update|log|decision|validation|touched> <task-id> [...]';
   const [provider, verb, taskId, ...rest] = args;
@@ -2844,6 +2934,9 @@ function main(argv) {
         break;
       case 'adapter':
         commandAdapter(args);
+        break;
+      case 'archive':
+        commandArchive(gitRoot, args);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
