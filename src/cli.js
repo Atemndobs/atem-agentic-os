@@ -223,6 +223,21 @@ function buildFrontmatter(fields) {
   return lines.join('\n');
 }
 
+function syncStateFrontmatter(content, taskId) {
+  const { data, body } = parseFrontmatter(content);
+  const mirror = {
+    task_id: taskId || data.task_id || '',
+    task_type: getSection(content, 'Task Type') || data.task_type || '',
+    status: getSection(content, 'Status') || data.status || 'active',
+    provider: getSection(content, 'Current Provider') || data.provider || 'manual',
+    repo: getSection(content, 'Primary Repository') || data.repo || '',
+    target_repo: getSection(content, 'Target Repository') || data.target_repo || '',
+    repos: data.repos || '',
+    schema: 'atem.session.v1',
+  };
+  return buildFrontmatter(mirror) + body;
+}
+
 function parseFrontmatter(content) {
   if (!content.startsWith('---\n')) return { data: {}, body: content };
   const end = content.indexOf('\n---\n', 4);
@@ -631,6 +646,7 @@ function routeTask(gitRoot, args, options = {}) {
   state = setSection(state, 'Current Provider', provider);
   state = setSection(state, 'Target Repository', targetRepository);
   state = setSection(state, 'Last Updated', nowStamp());
+  state = syncStateFrontmatter(state, taskId);
   writeFile(files.state, state);
 
   let handoff = readFile(files.handoff);
@@ -1330,6 +1346,7 @@ function commandClose(gitRoot, args) {
   state = setSection(state, 'Status', 'complete');
   state = setSection(state, 'Current Summary', 'Task marked complete.');
   state = setSection(state, 'Last Updated', nowStamp());
+  state = syncStateFrontmatter(state, taskId);
   writeFile(statePath, state);
 
   let handoff = readFile(handoffPath);
