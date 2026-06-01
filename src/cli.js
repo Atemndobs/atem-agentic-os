@@ -1673,9 +1673,10 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
         ? `${ICONS.ok} live`
         : `${ICONS.none} ${synthetic.formatRelativeAge(row.mtimeMs) || 'recent'}`,
       (row.title || '').slice(0, 40) || '—',
+      detectWorktreeName(row.cwd) || '—',
       row.cwd || '—',
     ]);
-    console.log(renderTable(['ATEM id', 'State', 'Title', 'cwd'], rows));
+    console.log(renderTable(['ATEM id', 'State', 'Title', 'Worktree', 'cwd'], rows));
     const footnotes = [];
     if (elidedCount > 0) footnotes.push(`Same repo, deduped: ${elidedCount} elided.`);
     if (otherRepoCount > 0) footnotes.push(`Other repos: ${otherRepoCount} hidden (pass --all to see).`);
@@ -1752,6 +1753,29 @@ function collectAmbientTasks(signals) {
   }
   out.sort((a, b) => (b.live - a.live) || (b.mtimeMs - a.mtimeMs));
   return out;
+}
+
+// Detect whether a cwd is a git worktree checkout. A worktree has `.git`
+// as a FILE (containing `gitdir: <main>/.git/worktrees/<name>`) rather
+// than a directory. Returns the worktree name when detectable, '' for
+// main repo / non-repo / unreadable.
+function detectWorktreeName(cwd) {
+  if (!cwd || cwd === 'unknown') return '';
+  const dotGit = path.join(cwd, '.git');
+  let stat;
+  try { stat = fs.statSync(dotGit); } catch { return ''; }
+  if (stat.isDirectory()) return ''; // main repo
+  if (!stat.isFile()) return '';
+  let content;
+  try { content = fs.readFileSync(dotGit, 'utf8'); } catch { return ''; }
+  const m = content.match(/gitdir:\s*(.+)/);
+  if (!m) return '';
+  const gitdir = m[1].trim();
+  // Standard: <main>/.git/worktrees/<name>[/...]
+  const wm = gitdir.match(/[/\\]worktrees[/\\]([^/\\]+)/);
+  if (wm) return wm[1];
+  // Fallback: use the basename of the cwd.
+  return path.basename(cwd);
 }
 
 function isPathWithinRepo(candidatePath, repoRoot) {

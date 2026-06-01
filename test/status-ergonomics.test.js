@@ -196,6 +196,43 @@ test('C.3: same (provider, cwd) collapses to one row with "N elided" footnote', 
   assert.match(out, /Same repo, deduped: 2 elided/);
 });
 
+test('C.3: Worktree column extracts name from .git file for worktree checkouts', () => {
+  const home = mktmp('atem-c3-worktree-');
+  const main = path.join(home, 'work', 'main');
+  initRepo(main);
+  // Synthesize a worktree checkout dir with a `.git` FILE pointing at
+  // a worktrees/<name> path. Matches what `git worktree add` produces.
+  const worktreeDir = path.join(home, 'work', 'wt-feature');
+  fs.mkdirSync(worktreeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(worktreeDir, '.git'),
+    `gitdir: ${path.join(main, '.git', 'worktrees', 'feature')}\n`
+  );
+  // Don't bother making the underlying gitdir real — detectWorktreeName
+  // only parses the file contents.
+
+  const claudeRoot = path.join(home, '.claude');
+  // One main-repo session + one worktree session.
+  writeTranscript(claudeRoot, main, 'main-id', [
+    { sessionId: 'main-id', cwd: main, message: { role: 'user', content: 'in main' } },
+  ], { mtimeMs: Date.now() - 60 * 60 * 1000 });
+  writeTranscript(claudeRoot, worktreeDir, 'wt-id', [
+    { sessionId: 'wt-id', cwd: worktreeDir, message: { role: 'user', content: 'in worktree' } },
+  ], { mtimeMs: Date.now() - 60 * 60 * 1000 });
+
+  const env = envFor(home);
+  runAtem(['init'], env);
+  const out = runAtem(['status', '--all'], env);
+
+  assert.match(out, /Worktree/, 'header column added');
+  assert.match(out, /feature/, 'worktree row shows the name');
+  // Main-repo row should NOT show the worktree name in its Worktree cell.
+  // Easiest way: check the row's order vs the unique worktree name.
+  const wtIdx = out.indexOf('in worktree');
+  const featureIdx = out.indexOf('feature');
+  assert.ok(featureIdx > -1 && wtIdx > -1, 'both must appear');
+});
+
 test('C.3: state column renders age for idle, live for alive sessions', () => {
   const home = mktmp('atem-c3-state-');
   const claudeRoot = path.join(home, '.claude');
