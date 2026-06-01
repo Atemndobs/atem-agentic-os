@@ -7,6 +7,18 @@ const PRODUCT_NAME = 'ATEM';
 const PRODUCT_TAGLINE = 'Session handoff for AI coding agents, backed by Git.';
 const GLOBAL_STATE_DIR = path.join(os.homedir(), '.atem', 'harness');
 
+// Lazy require to avoid a require-cycle (src/url.js / src/handles.js have
+// no dependency on cli.js, but we keep the load lazy so test-only paths
+// remain cheap).
+let _handles = null;
+function handlesModule() {
+  if (!_handles) _handles = require('./handles.js');
+  return _handles;
+}
+function syncHandlesQuietly(paths) {
+  try { handlesModule().syncAll(paths); } catch { /* best effort — never block CLI on this */ }
+}
+
 const PROVIDERS = new Set([
   'cursor',
   'claude-code',
@@ -744,6 +756,7 @@ function commandStart(gitRoot, rawArgs) {
   } else {
     console.log(`Task type: ${taskType} (inferred)`);
   }
+  syncHandlesQuietly(paths);
 }
 
 function routeTask(gitRoot, args, options = {}) {
@@ -822,6 +835,7 @@ function routeTask(gitRoot, args, options = {}) {
 
 function commandRoute(gitRoot, args) {
   routeTask(gitRoot, args, { silent: false });
+  syncHandlesQuietly(resolveActivePaths(gitRoot));
 }
 
 function commandAdopt(gitRoot, args) {
@@ -868,6 +882,7 @@ function commandAdopt(gitRoot, args) {
   writeFile(logPath, logContent);
 
   console.log(`Adopted external provider activity into ${taskId}`);
+  syncHandlesQuietly(paths);
 }
 
 function firstNumberedItem(content) {
@@ -1877,12 +1892,25 @@ function buildAgentsMdBlock(taskId, paths, targetRepo, taskType, provider) {
     '',
     '## Before doing anything',
     '',
-    'Read these files first:',
-    `- \`${sessionRel}/brief.md\` — what this task is`,
-    `- \`${sessionRel}/state.md\` — current state`,
-    `- \`${sessionRel}/handoff.md\` — what the previous provider left for you`,
-    `- \`${sessionRel}/next.md\` — what to do next`,
-    `- \`${sessionRel}/decisions.md\` — past decisions you must respect`,
+    'Read the active session files. Prefer the stable URL form — same path',
+    'regardless of harness mode or future layout changes:',
+    '',
+    '- `atem://current/brief` — what this task is',
+    '- `atem://current/state` — current state',
+    '- `atem://current/handoff` — what the previous provider left for you',
+    '- `atem://current/next` — what to do next',
+    '- `atem://current/decisions` — past decisions you must respect',
+    '',
+    'Dereference from a shell with `atem resolve <url>`. Same files are',
+    'symlinked under `~/.atem/handles/current/*.md` for providers whose',
+    'tools only accept literal local paths.',
+    '',
+    'Concrete paths for this harness (snapshot):',
+    `- \`${sessionRel}/brief.md\``,
+    `- \`${sessionRel}/state.md\``,
+    `- \`${sessionRel}/handoff.md\``,
+    `- \`${sessionRel}/next.md\``,
+    `- \`${sessionRel}/decisions.md\``,
     '',
     '## Repository boundary',
     '',
@@ -2000,6 +2028,60 @@ function commandHandoff(gitRoot, args) {
   }
 
   console.log(buildHandoffPrompt(taskId, provider, paths, resolvedTargetRepo, taskType));
+}
+
+function commandResolve(gitRoot, args) {
+  const url = args[0];
+  if (!url) throw new Error('Usage: atem resolve <atem://...>');
+  const paths = resolveActivePaths(gitRoot);
+  const { resolve: resolveUrl } = require('./url.js');
+  const result = resolveUrl(url, paths);
+  if (result.kind === 'error') {
+    throw new Error(`resolve failed [${result.code}]: ${result.message}`);
+  }
+  if (result.kind === 'file' || result.kind === 'directory') {
+    console.log(result.localPath);
+    return;
+  }
+  if (result.kind === 'virtual') {
+    console.log(JSON.stringify(result.payload, null, 2));
+    return;
+  }
+  throw new Error(`resolve returned unexpected kind: ${result.kind}`);
+}
+
+function commandUrl(gitRoot, args) {
+  const sub = args[0];
+  const rest = args.slice(1);
+  const handles = handlesModule();
+  const paths = resolveActivePaths(gitRoot);
+  switch (sub) {
+    case 'list': {
+      const { resolve: resolveUrl } = require('./url.js');
+      const result = resolveUrl('atem://list', paths);
+      if (result.kind === 'virtual') {
+        console.log(JSON.stringify(result.payload, null, 2));
+      } else {
+        throw new Error(`atem://list returned unexpected kind: ${result.kind}`);
+      }
+      return;
+    }
+    case 'handles': {
+      const info = handles.listHandles();
+      console.log(JSON.stringify(info, null, 2));
+      return;
+    }
+    case 'sync': {
+      const tasks = handles.syncAll(paths);
+      console.log(`Synced handle dirs for ${tasks.length} task(s) under ${handles.getHandlesRoot()}`);
+      return;
+    }
+    case 'resolve': {
+      return commandResolve(gitRoot, rest);
+    }
+    default:
+      throw new Error('Usage: atem url <list|handles|sync|resolve> [...]');
+  }
 }
 
 function commandIngestOmp(gitRoot, args) {
@@ -2255,6 +2337,19 @@ function commandDoctor(gitRoot) {
         report('WARN', `omp session ${s.sessionId} has no cwd in header`);
       }
     }
+  }
+
+  // Handles farm (~/.atem/handles/): ensure it's in sync + linked correctly.
+  try {
+    handlesModule().syncAll(paths);
+    const v = handlesModule().validate(paths);
+    if (v.ok) {
+      report('OK', `handle farm clean at ${handlesModule().getHandlesRoot()}`);
+    } else {
+      for (const issue of v.issues.slice(0, 10)) report('WARN', `handles: ${issue}`);
+    }
+  } catch (e) {
+    report('WARN', `handles farm check failed: ${e.message}`);
   }
 
   // If current task is routed to omp, the target repo should have AGENTS.md
@@ -2901,6 +2996,7 @@ function commandInstructions(gitRoot, args) {
     cursor: '.cursorrules',
     opencode: 'AGENTS.md',
     openrouter: 'AGENTS.md',
+    omp: 'AGENTS.md',
     'local-model': 'AGENTS.md',
     manual: 'AGENTS.md',
   };
@@ -2915,15 +3011,30 @@ function commandInstructions(gitRoot, args) {
     `Suggested install target: ${installTargets[provider]}`,
     '',
     '## Required Read Files',
-    `1. \`${paths.currentSessionFile}\``,
-    `2. \`${paths.routingFile}\``,
-    `3. \`${paths.providerContractFile}\``,
-    `4. \`${files.brief}\``,
-    `5. \`${files.state}\``,
-    `6. \`${files.handoff}\``,
-    `7. \`${files.decisions}\``,
-    `8. \`${files.next}\``,
-    `9. \`${files.validation}\``,
+    'Prefer the stable `atem://` URL form — same path regardless of',
+    'harness mode (global vs repo) or future layout changes.',
+    'Use `atem resolve <url>` from a shell to dereference to a real path.',
+    '',
+    '- `atem://current/brief`     (the task)',
+    '- `atem://current/state`     (where things stand)',
+    '- `atem://current/handoff`   (what the previous provider left for you)',
+    '- `atem://current/decisions` (don\'t re-litigate these)',
+    '- `atem://current/next`      (what to do next)',
+    '- `atem://current/validation` (test/audit notes)',
+    '',
+    'Materialized as files under `~/.atem/handles/current/*.md` for',
+    'providers whose tools only accept literal local paths.',
+    '',
+    'Concrete paths for this harness (snapshot — may move):',
+    `  1. \`${paths.currentSessionFile}\``,
+    `  2. \`${paths.routingFile}\``,
+    `  3. \`${paths.providerContractFile}\``,
+    `  4. \`${files.brief}\``,
+    `  5. \`${files.state}\``,
+    `  6. \`${files.handoff}\``,
+    `  7. \`${files.decisions}\``,
+    `  8. \`${files.next}\``,
+    `  9. \`${files.validation}\``,
     '## Repository Boundary',
     `Only work inside the target repository unless explicitly instructed otherwise.\nTarget repository: ${targetRepo}`,
     'Do not modify sibling repositories, sibling worktrees, or global ATEM files except the active session files.',
@@ -3855,6 +3966,12 @@ function main(argv) {
         break;
       case 'ingest-omp':
         commandIngestOmp(gitRoot, args);
+        break;
+      case 'resolve':
+        commandResolve(gitRoot, args);
+        break;
+      case 'url':
+        commandUrl(gitRoot, args);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);

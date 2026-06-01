@@ -3,13 +3,103 @@
 // They do NOT execute work — providers do. Adapters only standardize
 // how providers read and update ATEM session state.
 
+const fs = require('node:fs');
+const crypto = require('node:crypto');
 const session = require('./session.js');
 const omp = require('./omp.js');
+const url = require('../url.js');
+
+// URL-based read/write over atem:// paths. Lets any provider participate
+// in ATEM through one path convention instead of N adapter-specific
+// resolvers. Both methods take a `paths` bundle (from resolveActivePaths).
+
+function hashContent(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function readUrl(atemUrl, paths) {
+  const result = url.resolve(atemUrl, paths);
+  if (result.kind === 'error') {
+    const err = new Error(`atem:// read failed [${result.code}]: ${result.message}`);
+    err.code = result.code;
+    throw err;
+  }
+  if (result.kind === 'virtual') {
+    return {
+      kind: 'virtual',
+      mimeType: result.mimeType,
+      payload: result.payload,
+    };
+  }
+  if (result.kind === 'directory') {
+    return { kind: 'directory', localPath: result.localPath };
+  }
+  const content = fs.readFileSync(result.localPath, 'utf8');
+  return {
+    kind: 'file',
+    localPath: result.localPath,
+    mimeType: result.mimeType,
+    content,
+    hash: hashContent(content),
+  };
+}
+
+function writeUrl(atemUrl, content, paths, opts = {}) {
+  const result = url.resolve(atemUrl, paths);
+  if (result.kind === 'error') {
+    // Allow writes to artifacts whose file is allowed-but-missing.
+    if (result.code !== 'missing-file') {
+      const err = new Error(`atem:// write failed [${result.code}]: ${result.message}`);
+      err.code = result.code;
+      throw err;
+    }
+  }
+  let localPath;
+  if (result.kind === 'file' || result.kind === 'directory') {
+    localPath = result.localPath;
+  } else {
+    // missing-file → infer the canonical path by re-running url.resolve on
+    // the session-root and joining the alias. We require the URL to specify
+    // a known artifact for this fallback.
+    const parsed = url.parseUrl(atemUrl);
+    if (!parsed || parsed.tail.length !== 1) {
+      throw new Error(`atem:// write cannot create unknown artifact: ${atemUrl}`);
+    }
+    const alias = parsed.tail[0];
+    const fname = url.ARTIFACT_ALIASES[alias];
+    if (!fname) {
+      throw new Error(`atem:// write to unknown artifact alias: ${alias}`);
+    }
+    const taskId = parsed.target === 'current' ? url.getActiveTaskId(paths) : parsed.target;
+    if (!taskId) throw new Error('atem:// write: no active session');
+    const pathLib = require('node:path');
+    localPath = pathLib.join(paths.harnessDir, 'sessions', taskId, fname);
+  }
+  // Optional hash-anchored write: refuse if file changed since the caller
+  // read it. omp-style integrity guard.
+  if (opts.expectedHash && fs.existsSync(localPath)) {
+    const current = hashContent(fs.readFileSync(localPath, 'utf8'));
+    if (current !== opts.expectedHash) {
+      const err = new Error(`atem:// stale write rejected at ${atemUrl} (file changed since read)`);
+      err.code = 'stale-anchor';
+      throw err;
+    }
+  }
+  fs.mkdirSync(require('node:path').dirname(localPath), { recursive: true });
+  fs.writeFileSync(localPath, content);
+  return { localPath, hash: hashContent(content) };
+}
 
 function makeProviderAdapter(providerName, overrides = {}) {
   return {
     name: providerName,
     read: session.readSession,
+    // url-based read/write — opt-in second signature. Callers pass a
+    // paths bundle so the adapter stays stateless.
+    readUrl(atemUrl, paths) { return readUrl(atemUrl, paths); },
+    writeUrl(atemUrl, content, paths, opts) {
+      return writeUrl(atemUrl, content, paths, opts);
+    },
     update(taskId, patch = {}) {
       return session.updateSession(taskId, { ...patch, provider: providerName });
     },
@@ -91,4 +181,4 @@ function get(providerName) {
   return a;
 }
 
-module.exports = { session, adapters, get, omp };
+module.exports = { session, adapters, get, omp, url, readUrl, writeUrl, hashContent };
