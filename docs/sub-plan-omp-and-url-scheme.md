@@ -1,8 +1,10 @@
 # Sub-Plan: omp Provider Integration → `atem://` URL Scheme
 
 > Parent: `docs/action-plan.md` — Workstream 3 (Provider Adapter Layer)
-> Status: Drafted 2026-06-01
-> Ordering: Phase 1 ships first, Phase 2 builds on top.
+> Status: **Complete 2026-06-01** — both phases shipped, 38/38 tests pass
+> Phase 1 commit: omp as first-class provider (read-only contract)
+> Phase 2 commit: `atem://` URL scheme + handle farm + hash anchors
+> Ordering: Phase 1 shipped first, Phase 2 built on top.
 
 ---
 
