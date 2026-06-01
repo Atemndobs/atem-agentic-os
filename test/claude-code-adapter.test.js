@@ -177,7 +177,8 @@ test('atem status shows a title for ambient claude-code rows when a transcript e
 
   const env = envFor(home);
   runAtem(['init'], env);
-  const out = runAtem(['status'], env);
+  // --all bypasses Phase C.2 auto-scoping (test runs from project root).
+  const out = runAtem(['status', '--all'], env);
   assert.match(out, /Detected sessions/);
   assert.match(out, /claude-code:4444ee/);
   assert.match(out, /audit the cache eviction policy/, 'title from first user message should appear');

@@ -127,10 +127,12 @@ test('close marks state complete and logs closure', () => {
 test('status prints no-active message when no harness task exists', () => {
   const repoDir = setupRepo();
   run(repoDir, ['init']);
-  const output = run(repoDir, ['status']);
+  // --all bypasses Phase C.2 auto-scoping so the assertion below stays
+  // about the machine-wide signal table.
+  const output = run(repoDir, ['status', '--all']);
 
   assert.match(output, /ATEM status/);
-  assert.match(output, /Machine-wide provider activity/);
+  assert.match(output, /Provider activity \(machine-wide\)/);
   assert.match(output, /ATEM context:/);
   assert.match(output, /active task: none/);
 });
@@ -190,7 +192,7 @@ test('status --repo scopes provider activity to that repository', () => {
   );
 
   const output = runInDir(repoDir, ['status', '--repo', '.'], { HOME: fakeHome });
-  assert.match(output, /Machine-wide provider activity \(scoped to /);
+  assert.match(output, /Provider activity in /);
   assert.match(output, new RegExp(repoDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(output, new RegExp(otherRepo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });

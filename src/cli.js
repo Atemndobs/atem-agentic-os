@@ -445,25 +445,32 @@ function parseStartArgs(args) {
 
 function parseStatusArgs(args) {
   let repoFilter = '';
+  let showAll = false;
+  let explicitRepo = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--repo') {
       const value = args[i + 1];
       if (!value) {
-        throw new Error('Usage: atem status [--repo <repo-path>]');
+        throw new Error('Usage: atem status [--repo <repo-path>] [--all]');
       }
       repoFilter = path.resolve(value);
+      explicitRepo = true;
       i += 1;
+      continue;
+    }
+    if (token === '--all') {
+      showAll = true;
       continue;
     }
     if (token.startsWith('--')) {
       throw new Error(`Unknown flag for status: ${token}`);
     }
-    throw new Error('Usage: atem status [--repo <repo-path>]');
+    throw new Error('Usage: atem status [--repo <repo-path>] [--all]');
   }
 
-  return { repoFilter };
+  return { repoFilter, showAll, explicitRepo };
 }
 
 function parseGoalsArgs(args, gitRoot) {
@@ -1172,10 +1179,25 @@ function buildGoalsReportMarkdown(repoPath, docPaths, goals, tasks, unmatchedGoa
 }
 
 function commandStatus(gitRoot, args = []) {
-  const { repoFilter } = parseStatusArgs(args);
+  const { repoFilter, showAll, explicitRepo } = parseStatusArgs(args);
+  // Phase C.2: auto-scope to the current git repo unless --all or
+  // --repo was passed. Explicit --repo always wins.
+  let activeScope = repoFilter;
+  let autoScoped = false;
+  if (!explicitRepo && !showAll && gitRoot) {
+    activeScope = gitRoot;
+    autoScoped = true;
+  }
   console.log(`${PRODUCT_NAME} status`);
   console.log(PRODUCT_TAGLINE);
-  printExternalProviderActivity(repoFilter);
+  if (autoScoped) {
+    console.log(`Scoped to ${gitRoot} (auto — pass --all for machine-wide).`);
+  } else if (explicitRepo) {
+    console.log(`Scoped to ${repoFilter}.`);
+  } else {
+    console.log('Scope: machine-wide.');
+  }
+  printExternalProviderActivity(activeScope, { autoScoped, gitRoot });
   printRepoHarnessStatus(gitRoot);
 }
 
@@ -1253,16 +1275,12 @@ function isPidAlive(pid) {
 
 function getClaudeSessions() {
   const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
-  if (!fs.existsSync(sessionsDir)) {
-    return [];
-  }
-
-  const files = fs
-    .readdirSync(sessionsDir)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => path.join(sessionsDir, name));
-
   const sessions = [];
+  const files = fs.existsSync(sessionsDir)
+    ? fs.readdirSync(sessionsDir)
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => path.join(sessionsDir, name))
+    : [];
   for (const file of files) {
     try {
       const parsed = JSON.parse(readFile(file));
@@ -1327,6 +1345,38 @@ function getClaudeSessions() {
   }
 
   sessions.sort((a, b) => b.startedAt - a.startedAt);
+
+  // Phase C.1: append idle sessions whose transcript was touched
+  // within the recent window but whose pid is no longer alive. Live
+  // entries win on sessionId collision.
+  try {
+    const cc = require('./adapters/claude-code.js');
+    const liveIds = new Set(sessions.map((s) => s.sessionId).filter((id) => id && id !== 'unknown'));
+    const recent = cc.listRecentSessions();
+    for (const r of recent) {
+      if (!r.sessionId || liveIds.has(r.sessionId)) continue;
+      sessions.push({
+        pid: null,
+        sessionId: r.sessionId,
+        cwd: r.cwd || 'unknown',
+        entrypoint: 'idle',
+        startedAt: r.mtimeMs || 0,
+        syntheticId: synthetic.deriveSyntheticId('claude-code', r.sessionId),
+        title: r.title || '',
+        mtimeMs: r.mtimeMs || 0,
+        live: false,
+      });
+    }
+  } catch { /* best effort */ }
+
+  // Stamp live=true on the pid-alive entries for consistent downstream
+  // handling. The mtimeMs falls back to startedAt for live sessions so
+  // the ambient-task sort still works.
+  for (const s of sessions) {
+    if (s.live === undefined) s.live = true;
+    if (typeof s.mtimeMs !== 'number') s.mtimeMs = s.startedAt || 0;
+  }
+
   return sessions;
 }
 
@@ -1482,8 +1532,8 @@ function getOmpSessions(processLines = getProcessLines()) {
   // (b) live `omp` processes. A session is "live" when an omp pid's cwd
   // matches its header.cwd. Headers are the authoritative source for cwd
   // (the encoded dir name is lossy).
-  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
-  const candidateFiles = listOmpSessionFiles({ since: Date.now() - TWELVE_HOURS });
+  // Phase C.1: use the shared recent-window for parity with claude-code.
+  const candidateFiles = listOmpSessionFiles({ since: Date.now() - synthetic.getRecentWindowMs() });
   if (candidateFiles.length === 0 && getOmpProcesses(processLines).length === 0) {
     return [];
   }
@@ -1537,8 +1587,11 @@ function getOmpSessions(processLines = getProcessLines()) {
   return sessions;
 }
 
-function printExternalProviderActivity(repoFilter = '') {
+function printExternalProviderActivity(repoFilter = '', opts = {}) {
   const signals = collectExternalProviderSignals(repoFilter);
+  // Phase C.3: also collect machine-wide signals so we can report
+  // "N session(s) in other repos hidden" honestly when scoped.
+  const allSignals = (repoFilter || opts.autoScoped) ? collectExternalProviderSignals('') : signals;
   const {
     claudeSessions,
     codexServers,
@@ -1559,10 +1612,12 @@ function printExternalProviderActivity(repoFilter = '') {
     (ompSessions ? ompSessions.length : 0);
 
   console.log('');
-  if (repoFilter) {
-    console.log(`Machine-wide provider activity (scoped to ${repoFilter}) (${totalDetected} signals):`);
+  if (opts.autoScoped) {
+    console.log(`Provider activity in ${opts.gitRoot} (${totalDetected} signals):`);
+  } else if (repoFilter) {
+    console.log(`Provider activity in ${repoFilter} (${totalDetected} signals):`);
   } else {
-    console.log(`Machine-wide provider activity (${totalDetected} signals):`);
+    console.log(`Provider activity (machine-wide) (${totalDetected} signals):`);
   }
 
   const fmt = (count, label) => count === 0
@@ -1600,22 +1655,59 @@ function printExternalProviderActivity(repoFilter = '') {
     console.log(renderTable(['Provider', 'Signal', 'Count', 'Path'], detailRows));
   }
 
-  // Ambient task identity (Phase A): show synthetic ids derived from
-  // provider-side session ids. These are addressable as atem://<id>/...
-  // even though no ATEM session dir exists yet.
+  // Ambient task identity (Phase A + Phase C). Dedupe by (provider, cwd)
+  // so a single repo with three abandoned Claude sessions collapses to
+  // one row. State column renders `live` or `Nh ago`. Show hidden-
+  // elsewhere counts when scope hides some.
   const ambient = collectAmbientTasks(signals);
-  if (ambient.length > 0) {
+  const ambientAll = collectAmbientTasks(allSignals);
+  const { kept: deduped, elidedCount } = dedupeAmbientTasks(ambient);
+  const otherRepoCount = Math.max(0, ambientAll.length - ambient.length);
+
+  if (deduped.length > 0 || otherRepoCount > 0) {
     console.log('');
-    console.log(`Detected sessions (${ambient.length}):`);
-    const rows = ambient.slice(0, 10).map((row) => [
+    console.log(`Detected sessions (${deduped.length}):`);
+    const rows = deduped.slice(0, 10).map((row) => [
       synthetic.shortId(row.syntheticId, 6),
-      row.live ? `${ICONS.ok} live` : `${ICONS.none} recent`,
+      row.live
+        ? `${ICONS.ok} live`
+        : `${ICONS.none} ${synthetic.formatRelativeAge(row.mtimeMs) || 'recent'}`,
       (row.title || '').slice(0, 40) || '—',
       row.cwd || '—',
     ]);
     console.log(renderTable(['ATEM id', 'State', 'Title', 'cwd'], rows));
-    console.log(`Tip: \`atem resolve atem://${synthetic.shortId(ambient[0].syntheticId, 6)}.../<artifact>\` works without \`atem start\`.`);
+    const footnotes = [];
+    if (elidedCount > 0) footnotes.push(`Same repo, deduped: ${elidedCount} elided.`);
+    if (otherRepoCount > 0) footnotes.push(`Other repos: ${otherRepoCount} hidden (pass --all to see).`);
+    if (footnotes.length > 0) console.log(footnotes.join(' '));
+    if (deduped[0]) {
+      console.log(`Tip: \`atem resolve atem://${synthetic.shortId(deduped[0].syntheticId, 6)}.../<artifact>\` works without \`atem start\`.`);
+    }
   }
+}
+
+// Phase C.3: keep the freshest entry per (provider, cwd) pair. Live
+// beats idle on ties; otherwise mtimeMs desc. Same-repo collisions
+// without a cwd ("unknown") are kept individually.
+function dedupeAmbientTasks(rows) {
+  const sorted = [...rows].sort((a, b) => {
+    if (a.live !== b.live) return a.live ? -1 : 1;
+    return (b.mtimeMs || 0) - (a.mtimeMs || 0);
+  });
+  const seen = new Map();
+  const kept = [];
+  let elidedCount = 0;
+  for (const row of sorted) {
+    if (!row.cwd || row.cwd === 'unknown') {
+      kept.push(row);
+      continue;
+    }
+    const key = `${row.provider}|${row.cwd}`;
+    if (seen.has(key)) { elidedCount += 1; continue; }
+    seen.set(key, true);
+    kept.push(row);
+  }
+  return { kept, elidedCount };
 }
 
 function collectAmbientTasks(signals) {
@@ -1638,8 +1730,10 @@ function collectAmbientTasks(signals) {
       provider: 'claude-code',
       title: s.title || '',
       cwd: s.cwd,
-      live: true, // claude detector filters by isPidAlive already
-      mtimeMs: s.startedAt || 0,
+      // Phase C.1: live or idle. The getClaudeSessions detector
+      // stamps both fields.
+      live: s.live !== false,
+      mtimeMs: s.mtimeMs || s.startedAt || 0,
     });
   }
   // Codex: synthesize cwd-based ids from active workspace roots.
@@ -1662,8 +1756,13 @@ function collectAmbientTasks(signals) {
 
 function isPathWithinRepo(candidatePath, repoRoot) {
   if (!candidatePath || candidatePath === 'unknown' || !repoRoot) return false;
-  const candidate = path.resolve(candidatePath);
-  const root = path.resolve(repoRoot);
+  // realpath both sides where possible so /tmp ↔ /private/tmp (macOS),
+  // /var ↔ /private/var, and symlinked worktrees collapse correctly.
+  const real = (p) => {
+    try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+  };
+  const candidate = real(candidatePath);
+  const root = real(repoRoot);
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
 
@@ -1717,8 +1816,12 @@ function collectExternalProviderSignals(repoFilter = '') {
   const processLines = getProcessLines();
   const codexRoots = getCodexWorkspaceRoots();
 
+  // Dedupe key includes sessionId so multiple idle sessions in the
+  // same cwd (all carrying pid=null, entrypoint='idle') don't collapse
+  // to one signal. Phase C.3 handles same-(provider, cwd) dedupe at
+  // the ambient-task level instead, where it belongs.
   const claudeSessions = uniqueBy(getClaudeSessions(), (session) =>
-    [session.pid, session.entrypoint, session.cwd].join('|')
+    [session.pid, session.entrypoint, session.cwd, session.sessionId].join('|')
   );
   const codexServers = uniqueBy(getCodexAppServers(processLines), (entry) =>
     [entry.pid, entry.command].join('|')

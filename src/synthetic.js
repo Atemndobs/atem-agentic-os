@@ -80,6 +80,39 @@ function cwdFallbackId(provider, cwd) {
   return `${provider}:cwd-${hash}`;
 }
 
+// --- Recent-session window (Phase C.1) ----------------------------------
+//
+// One window for every provider. Defaults to 48h (Friday→Monday).
+// Configurable via env: ATEM_RECENT_WINDOW_HOURS=NN.
+
+const DEFAULT_RECENT_WINDOW_HOURS = 48;
+
+function getRecentWindowMs() {
+  const raw = process.env.ATEM_RECENT_WINDOW_HOURS;
+  const parsed = raw ? Number(raw) : NaN;
+  const hours = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_RECENT_WINDOW_HOURS;
+  return Math.round(hours * 60 * 60 * 1000);
+}
+
+function isRecent(mtimeMs, now = Date.now()) {
+  if (typeof mtimeMs !== 'number' || !mtimeMs) return false;
+  return (now - mtimeMs) <= getRecentWindowMs();
+}
+
+// "5m ago" | "3h ago" | "2d ago". Returns "" for invalid input.
+function formatRelativeAge(mtimeMs, now = Date.now()) {
+  if (typeof mtimeMs !== 'number' || !mtimeMs) return '';
+  const deltaMs = Math.max(0, now - mtimeMs);
+  const sec = Math.floor(deltaMs / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
+}
+
 module.exports = {
   SYNTHETIC_PROVIDERS,
   SYNTHETIC_RE,
@@ -88,4 +121,9 @@ module.exports = {
   deriveSyntheticId,
   shortId,
   cwdFallbackId,
+  // Recent-session window (Phase C.1)
+  getRecentWindowMs,
+  isRecent,
+  formatRelativeAge,
+  DEFAULT_RECENT_WINDOW_HOURS,
 };

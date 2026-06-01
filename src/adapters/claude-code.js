@@ -63,6 +63,93 @@ function findSessionFileById(sessionId) {
   return findTranscriptForRegistry({ sessionId });
 }
 
+// Cheap read of the first entry that carries a `cwd` field. Many
+// transcripts open with `queue-operation` entries that have no `cwd`,
+// so we scan up to ~128 KiB of head bytes before giving up.
+function sniffCwdFromTranscript(file) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(128 * 1024);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const head = buf.slice(0, n).toString('utf8');
+    for (const line of head.split('\n')) {
+      if (!line.trim()) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e && typeof e.cwd === 'string' && e.cwd) return e.cwd;
+    }
+  } catch { /* fall through */ }
+  return '';
+}
+
+// Cheap read of the first user prompt — same head-scan as
+// getClaudeSessions in cli.js. Returns "" if nothing found.
+function sniffTitleFromTranscript(file, maxLen = 60) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(128 * 1024);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const head = buf.slice(0, n).toString('utf8');
+    for (const line of head.split('\n')) {
+      if (!line.trim()) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e && e.type === 'queue-operation' && e.operation === 'enqueue' && typeof e.content === 'string') {
+        return e.content.replace(/\s+/g, ' ').trim().slice(0, maxLen);
+      }
+      const msg = e && e.message;
+      if (msg && msg.role === 'user') {
+        const text = typeof msg.content === 'string'
+          ? msg.content
+          : (Array.isArray(msg.content) && msg.content.find((b) => b && typeof b.text === 'string')?.text) || '';
+        if (text) return String(text).replace(/\s+/g, ' ').trim().slice(0, maxLen);
+      }
+    }
+  } catch { /* fall through */ }
+  return '';
+}
+
+// Phase C.1: list transcripts touched within the given window. Cheap:
+// stat all `.jsonl` files in projects/, drop anything older than the
+// window, and only then sniff cwd + title from the survivors.
+//
+// Returns: [{ sessionId, cwd, title, file, mtimeMs }]
+function listRecentSessions({ sinceMs, now = Date.now(), maxResults = 200 } = {}) {
+  const projectsDir = getProjectsDir();
+  if (!fs.existsSync(projectsDir)) return [];
+  const cutoff = typeof sinceMs === 'number'
+    ? sinceMs
+    : (now - require('../synthetic.js').getRecentWindowMs());
+  let dirs;
+  try { dirs = fs.readdirSync(projectsDir, { withFileTypes: true }); } catch { return []; }
+
+  const candidates = [];
+  for (const e of dirs) {
+    if (!e.isDirectory()) continue;
+    const subdir = path.join(projectsDir, e.name);
+    let names;
+    try { names = fs.readdirSync(subdir); } catch { continue; }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(subdir, name);
+      let stat;
+      try { stat = fs.statSync(file); } catch { continue; }
+      if (stat.mtimeMs < cutoff) continue;
+      candidates.push({ file, mtimeMs: stat.mtimeMs, sessionId: name.slice(0, -'.jsonl'.length), encodedDir: e.name });
+    }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const trimmed = candidates.slice(0, maxResults);
+
+  return trimmed.map((c) => ({
+    sessionId: c.sessionId,
+    cwd: sniffCwdFromTranscript(c.file),
+    title: sniffTitleFromTranscript(c.file),
+    file: c.file,
+    mtimeMs: c.mtimeMs,
+  }));
+}
+
 function findLatestSessionFile(cwd) {
   const projectsDir = getProjectsDir();
   if (!fs.existsSync(projectsDir)) return null;
@@ -207,4 +294,8 @@ module.exports = {
   findSessionFileById,
   findLatestSessionFile,
   distillSessionSync,
+  // Phase C.1
+  listRecentSessions,
+  sniffCwdFromTranscript,
+  sniffTitleFromTranscript,
 };

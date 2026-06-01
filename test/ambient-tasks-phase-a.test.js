@@ -86,7 +86,9 @@ test('atem status shows Detected sessions for an ambient omp session', () => {
       message: { role: 'assistant', content: [{ type: 'text', text: 'Located in src/auth.ts.' }] } },
   ]);
 
-  const out = runAtem(['status'], env);
+  // --all bypasses Phase C.2 auto-scoping (tests run from project root,
+  // a git repo, which would otherwise filter out the tmp session).
+  const out = runAtem(['status', '--all'], env);
   assert.match(out, /Detected sessions/);
   assert.match(out, /omp:01HGY4/, 'short synthetic id should appear in table');
 });
