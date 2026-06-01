@@ -92,6 +92,16 @@ function materializeSyntheticTask(syntheticId, paths, opts = {}) {
     }
     distilled = omp.distillSessionSync(file);
     if (!distilled) throw new Error(`failed to distill ${file}`);
+  } else if (parsed.provider === 'claude-code') {
+    const cc = registry.claudeCode;
+    let file = opts.sessionFile || null;
+    if (!file) file = cc.findSessionFileById(parsed.providerSessionId);
+    if (!file && opts.cwd) file = cc.findLatestSessionFile(opts.cwd);
+    if (!file) {
+      throw new Error(`claude-code transcript not found for ${syntheticId}; pass --cc-file or --cc-cwd`);
+    }
+    distilled = cc.distillSessionSync(file);
+    if (!distilled) throw new Error(`failed to distill ${file}`);
   }
 
   const taskType = opts.taskType || inferTaskType(parsed.provider, distilled);

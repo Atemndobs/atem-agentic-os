@@ -1273,6 +1273,45 @@ function getClaudeSessions() {
       const syntheticId = sessionId
         ? synthetic.deriveSyntheticId('claude-code', sessionId)
         : (cwd ? synthetic.cwdFallbackId('claude-code', cwd) : '');
+      // Best-effort title from the transcript's first user content.
+      // Two paths: (a) walk the first few KB looking for a queue-operation
+      // with content (the cheap signal Claude Code itself records), then
+      // (b) fall back to a full distill if needed. We bound the scan at
+      // 128 KiB to keep `atem status` fast for huge transcripts.
+      let title = '';
+      if (sessionId) {
+        try {
+          const cc = require('./adapters/claude-code.js');
+          const tFile = cc.findSessionFileById(sessionId);
+          if (tFile) {
+            const fd = fs.openSync(tFile, 'r');
+            const buf = Buffer.alloc(128 * 1024);
+            const n = fs.readSync(fd, buf, 0, buf.length, 0);
+            fs.closeSync(fd);
+            const head = buf.slice(0, n).toString('utf8');
+            for (const line of head.split('\n')) {
+              if (!line.trim()) continue;
+              let e; try { e = JSON.parse(line); } catch { continue; }
+              // Path (a): queue-operation captures user prompts as top-level content.
+              if (e && e.type === 'queue-operation' && e.operation === 'enqueue' && typeof e.content === 'string') {
+                title = e.content.replace(/\s+/g, ' ').trim().slice(0, 60);
+                break;
+              }
+              // Path (b): regular message records.
+              const msg = e && e.message;
+              if (msg && msg.role === 'user') {
+                const text = typeof msg.content === 'string'
+                  ? msg.content
+                  : (Array.isArray(msg.content) && msg.content.find((b) => b && typeof b.text === 'string')?.text) || '';
+                if (text) {
+                  title = String(text).replace(/\s+/g, ' ').trim().slice(0, 60);
+                  break;
+                }
+              }
+            }
+          }
+        } catch { /* best effort */ }
+      }
       sessions.push({
         pid: parsed.pid,
         sessionId: sessionId || 'unknown',
@@ -1280,6 +1319,7 @@ function getClaudeSessions() {
         entrypoint: parsed.entrypoint || 'unknown',
         startedAt: typeof parsed.startedAt === 'number' ? parsed.startedAt : 0,
         syntheticId,
+        title,
       });
     } catch {
       // Ignore malformed files.
@@ -1596,10 +1636,24 @@ function collectAmbientTasks(signals) {
     out.push({
       syntheticId: s.syntheticId,
       provider: 'claude-code',
-      title: '',
+      title: s.title || '',
       cwd: s.cwd,
       live: true, // claude detector filters by isPidAlive already
       mtimeMs: s.startedAt || 0,
+    });
+  }
+  // Codex: synthesize cwd-based ids from active workspace roots.
+  // Codex doesn't expose a stable session id in its app-server output,
+  // so we fall back to a deterministic hash of the cwd.
+  for (const root of (signals.codexRoots || [])) {
+    if (!root) continue;
+    out.push({
+      syntheticId: synthetic.cwdFallbackId('codex', root),
+      provider: 'codex',
+      title: '',
+      cwd: root,
+      live: true,
+      mtimeMs: 0,
     });
   }
   out.sort((a, b) => (b.live - a.live) || (b.mtimeMs - a.mtimeMs));

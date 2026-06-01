@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const session = require('./session.js');
 const omp = require('./omp.js');
+const claudeCode = require('./claude-code.js');
 const url = require('../url.js');
 const synthetic = require('../synthetic.js');
 
@@ -165,15 +166,20 @@ function makeProviderAdapter(providerName, overrides = {}) {
 }
 
 // --- Phase A: synthetic id rendering -------------------------------------
+//
+// Same shape for every provider whose adapter has a real distiller.
+// The distilled view is provider-neutral (sessionId/cwd/firstTask/
+// summary/etc), so one renderer serves all of them. Provider-specific
+// flavor lives in the meta block (provider name + extras like "mode").
 
-function renderOmpSyntheticArtifact(distilled, artifact, syntheticId) {
+function renderSyntheticArtifact(provider, distilled, artifact, syntheticId) {
   const banner = [
     `<!-- atem synthetic view of ${syntheticId} -->`,
     `<!-- read-only; promote with \`atem adopt ${syntheticId} --name <alias>\` to materialize -->`,
     '',
   ].join('\n');
   const meta = [
-    `- Provider: omp`,
+    `- Provider: ${provider}`,
     `- Session: ${distilled.sessionId}`,
     `- cwd: ${distilled.cwd || '(unknown)'}`,
     distilled.title ? `- Title: ${distilled.title}` : '',
@@ -189,7 +195,7 @@ function renderOmpSyntheticArtifact(distilled, artifact, syntheticId) {
     case 'overview':
       return banner + `# State — synthetic\n\n${meta}\n\n## Summary\n\n${distilled.summary || '(no summary distilled)'}\n\n## Last user message\n\n${distilled.lastUserMessage || '(none)'}\n\n## Last assistant text\n\n${distilled.lastAssistantText || '(none)'}\n`;
     case 'handoff':
-      return banner + `# Handoff — synthetic\n\n${meta}\n\n## Where omp left off\n\n${distilled.summary || distilled.lastAssistantText || '(no progress captured)'}\n\n## Next provider should\n\nRead the brief and state above, then continue from "Where omp left off".\n\n${distilled.pausedMidTool ? '⚠ omp may be paused mid tool-call — verify before continuing.\n' : ''}`;
+      return banner + `# Handoff — synthetic\n\n${meta}\n\n## Where ${provider} left off\n\n${distilled.summary || distilled.lastAssistantText || '(no progress captured)'}\n\n## Next provider should\n\nRead the brief and state above, then continue from "Where ${provider} left off".\n\n${distilled.pausedMidTool ? `⚠ ${provider} may be paused mid tool-call — verify before continuing.\n` : ''}`;
     case 'next':
       return banner + `# Next — synthetic\n\n(Synthetic task. Promote with \`atem adopt ${syntheticId}\` to materialize and edit.)\n`;
     case 'decisions':
@@ -200,10 +206,15 @@ function renderOmpSyntheticArtifact(distilled, artifact, syntheticId) {
     case 'validation':
       return banner + `# Validation — synthetic\n\n(synthetic; no validation captured)\n`;
     case 'log':
-      return banner + `# Log — synthetic\n\nomp session started ${distilled.startedAt || '(unknown)'}.\n`;
+      return banner + `# Log — synthetic\n\n${provider} session started ${distilled.startedAt || '(unknown)'}.\n`;
     default:
-      throw new Error(`unknown synthetic artifact for omp: ${artifact}`);
+      throw new Error(`unknown synthetic artifact for ${provider}: ${artifact}`);
   }
+}
+
+// Backwards-compatible alias for callers that imported the omp-specific name.
+function renderOmpSyntheticArtifact(distilled, artifact, syntheticId) {
+  return renderSyntheticArtifact('omp', distilled, artifact, syntheticId);
 }
 
 // omp adapter: same ATEM-side API as the others, but also exposes
@@ -233,7 +244,7 @@ const ompAdapter = makeProviderAdapter('omp', {
     const distilled = omp.distillSessionSync(file);
     if (!distilled) throw new Error(`failed to distill ${file}`);
     return {
-      content: renderOmpSyntheticArtifact(distilled, artifact, syntheticId),
+      content: renderSyntheticArtifact('omp', distilled, artifact, syntheticId),
       mimeType: 'text/markdown',
       metadata: { sessionFile: file, sessionId: distilled.sessionId },
     };
@@ -269,8 +280,59 @@ const ompAdapter = makeProviderAdapter('omp', {
   },
 });
 
+// Claude Code adapter: same shape as omp. The distiller lives in
+// src/adapters/claude-code.js and reads ~/.claude/projects/*/<id>.jsonl.
+const claudeCodeAdapter = makeProviderAdapter('claude-code', {
+  external: {
+    getRootDir: claudeCode.getRootDir,
+    getProjectsDir: claudeCode.getProjectsDir,
+    encodeProjectDirName: claudeCode.encodeProjectDirName,
+    findSessionFileById: claudeCode.findSessionFileById,
+    findLatestSessionFile: claudeCode.findLatestSessionFile,
+    distill: claudeCode.distillSessionSync,
+  },
+  resolveSynthetic(syntheticId, artifact) {
+    const parsed = synthetic.parseSyntheticId(syntheticId);
+    if (!parsed || parsed.provider !== 'claude-code') {
+      throw new Error(`not a claude-code synthetic id: ${syntheticId}`);
+    }
+    const file = claudeCode.findSessionFileById(parsed.providerSessionId);
+    if (!file) throw new Error(`claude-code transcript not found for ${parsed.providerSessionId}`);
+    const distilled = claudeCode.distillSessionSync(file);
+    if (!distilled) throw new Error(`failed to distill ${file}`);
+    return {
+      content: renderSyntheticArtifact('claude-code', distilled, artifact, syntheticId),
+      mimeType: 'text/markdown',
+      metadata: { sessionFile: file, sessionId: distilled.sessionId },
+    };
+  },
+  ingest(taskId, taskOpts = {}) {
+    let file = taskOpts.sessionFile || null;
+    if (!file && taskOpts.sessionId) file = claudeCode.findSessionFileById(taskOpts.sessionId);
+    if (!file && taskOpts.cwd) file = claudeCode.findLatestSessionFile(taskOpts.cwd);
+    if (!file) {
+      throw new Error('claude-code.ingest: no session found (provide cwd, sessionId, or sessionFile)');
+    }
+    const d = claudeCode.distillSessionSync(file);
+    if (!d) throw new Error(`claude-code.ingest: failed to parse ${file}`);
+    const summary = d.summary
+      || d.lastAssistantText
+      || (d.pausedMidTool ? 'claude-code paused mid tool-call' : 'claude-code session in progress');
+    session.updateSession(taskId, { provider: 'claude-code', summary });
+    session.logEvent(taskId, `[claude-code] ingested session ${d.sessionId} from ${file}`);
+    if (d.firstTask) {
+      session.recordDecision(taskId, {
+        decision: 'claude-code first-task captured',
+        reason: d.firstTask,
+        impact: d.model ? `model: ${d.model}, mode: ${d.mode}` : '',
+      });
+    }
+    return d;
+  },
+});
+
 const adapters = {
-  'claude-code': makeProviderAdapter('claude-code'),
+  'claude-code': claudeCodeAdapter,
   codex: makeProviderAdapter('codex'),
   cursor: makeProviderAdapter('cursor'),
   opencode: makeProviderAdapter('opencode'),
@@ -286,4 +348,4 @@ function get(providerName) {
   return a;
 }
 
-module.exports = { session, adapters, get, omp, url, readUrl, writeUrl, hashContent };
+module.exports = { session, adapters, get, omp, claudeCode, url, readUrl, writeUrl, hashContent };
