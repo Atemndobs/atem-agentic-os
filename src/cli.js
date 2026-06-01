@@ -841,13 +841,38 @@ function commandRoute(gitRoot, args) {
 }
 
 function commandAdopt(gitRoot, args) {
-  const taskId = args[0];
-  if (!taskId) {
-    throw new Error('Usage: atem adopt <task-id>');
-  }
-
   const paths = resolveActivePaths(gitRoot);
   ensureHarnessReady(paths);
+
+  // --auto: materialize every detected ambient session in one shot.
+  if (args.includes('--auto')) {
+    return commandAdoptAuto(gitRoot, paths, args);
+  }
+
+  const rawTaskId = args[0];
+  if (!rawTaskId) {
+    throw new Error('Usage: atem adopt <task-id> [--name <alias>] [--type <task-type>] [--omp-cwd PATH | --omp-file PATH]');
+  }
+
+  // --name <alias>: write the alias entry (and materialize, since
+  // the user is signaling commitment).
+  const nameIdx = args.indexOf('--name');
+  const alias = nameIdx >= 0 ? args[nameIdx + 1] : null;
+  const typeIdx = args.indexOf('--type');
+  const requestedType = typeIdx >= 0 ? args[typeIdx + 1] : null;
+  const cwdIdx = args.indexOf('--omp-cwd');
+  const fileIdx = args.indexOf('--omp-file');
+  const materializeOpts = {
+    cwd: cwdIdx >= 0 ? args[cwdIdx + 1] : process.cwd(),
+    sessionFile: fileIdx >= 0 ? args[fileIdx + 1] : null,
+    taskType: requestedType && isValidTaskType(requestedType) ? requestedType : null,
+  };
+  const taskId = resolveTaskIdForMutation(paths, rawTaskId, materializeOpts);
+  if (alias) {
+    require('./aliases.js').setAlias(paths, alias, taskId);
+    console.log(`Aliased: ${alias} → ${taskId}`);
+  }
+
   const sessionDir = requireSession(paths, taskId);
 
   const signals = collectExternalProviderSignals();
@@ -884,6 +909,35 @@ function commandAdopt(gitRoot, args) {
   writeFile(logPath, logContent);
 
   console.log(`Adopted external provider activity into ${taskId}`);
+  syncHandlesQuietly(paths);
+}
+
+// `atem adopt --auto` — materialize every detected ambient task that
+// isn't already materialized. Skips ones that are.
+function commandAdoptAuto(gitRoot, paths, args) {
+  const signals = collectExternalProviderSignals();
+  const ambient = collectAmbientTasks(signals);
+  if (ambient.length === 0) {
+    console.log('No ambient sessions detected.');
+    return;
+  }
+  const { materializeSyntheticTask } = require('./materialize.js');
+  const created = [];
+  const skipped = [];
+  for (const row of ambient) {
+    const sessionDir = path.join(paths.harnessDir, 'sessions', row.syntheticId);
+    if (fs.existsSync(sessionDir)) { skipped.push(row.syntheticId); continue; }
+    try {
+      materializeSyntheticTask(row.syntheticId, paths, { cwd: row.cwd });
+      created.push(row.syntheticId);
+    } catch (e) {
+      console.error(`Skipped ${row.syntheticId}: ${e.message}`);
+    }
+  }
+  console.log(`Materialized ${created.length} ambient task(s), skipped ${skipped.length} already materialized.`);
+  if (created.length > 0) {
+    console.log(renderTable(['Materialized'], created.map((id) => [id])));
+  }
   syncHandlesQuietly(paths);
 }
 
@@ -2005,9 +2059,27 @@ function writeAgentsMd(targetRepo, taskId, paths, taskType, provider) {
   return dest;
 }
 
+// Resolve a task id arg through the alias table and (if synthetic and
+// unmaterialized) materialize it on demand. Returns the canonical task
+// id (alias resolved, synthetic preserved) that downstream code can
+// pass to requireSession.
+function resolveTaskIdForMutation(paths, rawTaskId, opts = {}) {
+  const a = require('./aliases.js');
+  const aliasTarget = a.resolveAlias(paths, rawTaskId);
+  const taskId = aliasTarget || rawTaskId;
+  if (synthetic.isSyntheticId(taskId)) {
+    const sessionDir = path.join(paths.harnessDir, 'sessions', taskId);
+    if (!fs.existsSync(sessionDir)) {
+      const { materializeSyntheticTask } = require('./materialize.js');
+      materializeSyntheticTask(taskId, paths, opts);
+    }
+  }
+  return taskId;
+}
+
 function commandHandoff(gitRoot, args) {
-  const taskId = args[0];
-  if (!taskId) {
+  const rawTaskId = args[0];
+  if (!rawTaskId) {
     throw new Error('Usage: atem handoff <task-id>');
   }
   const toFlagIndex = args.indexOf('--to');
@@ -2034,6 +2106,12 @@ function commandHandoff(gitRoot, args) {
 
   const paths = resolveActivePaths(gitRoot);
   ensureHarnessReady(paths);
+  // Phase B: resolve aliases + materialize synthetic ids before any
+  // requireSession call. For omp synthetic ids, pass cwd/file flags
+  // through so the materializer can find the right jsonl.
+  const taskId = resolveTaskIdForMutation(paths, rawTaskId, {
+    cwd: targetRepo || process.cwd(),
+  });
   const sessionDir = requireSession(paths, taskId);
   const files = getSessionFileMap(sessionDir);
 
@@ -2262,6 +2340,32 @@ function commandDoctor(gitRoot) {
     report('FAIL', 'current session file is missing');
     flush();
     return;
+  }
+
+  // Alias table integrity (Phase B). Run BEFORE the per-task checks so
+  // broken aliases surface even when there's no active task.
+  try {
+    const aliasesMod = require('./aliases.js');
+    const aliasTable = aliasesMod.readAliases(paths);
+    const aliasIds = Object.keys(aliasTable);
+    if (aliasIds.length === 0) {
+      report('OK', 'no aliases registered');
+    } else {
+      report('OK', `${aliasIds.length} alias(es) registered`);
+      for (const alias of aliasIds) {
+        const target = aliasTable[alias];
+        const sessionDir = path.join(paths.harnessDir, 'sessions', target);
+        if (!fs.existsSync(sessionDir)) {
+          if (synthetic.isSyntheticId(target)) {
+            report('WARN', `alias "${alias}" → unmaterialized synthetic "${target}" (run \`atem adopt ${target} --name ${alias}\`)`);
+          } else {
+            report('FAIL', `alias "${alias}" → missing task "${target}"`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    report('WARN', `alias-table check failed: ${e.message}`);
   }
 
   const currentSession = readFile(paths.currentSessionFile);

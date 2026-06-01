@@ -1,9 +1,10 @@
 # Sub-Plan: Ambient Tasks — Reuse Provider Session IDs
 
 > Parent: `docs/action-plan.md` — extends Workstream 1 (Task Intent System)
-> Builds on: `docs/sub-plan-omp-and-url-scheme.md` (must ship first)
-> Status: drafted 2026-06-01
-> Ordering: Phase A ships first (read-only), Phase B opt-in after.
+> Builds on: `docs/sub-plan-omp-and-url-scheme.md`
+> Status: **Complete 2026-06-01** — Phase A + Phase B shipped, 54/54 tests pass
+> Phase A commit: read-only synthetic ids
+> Phase B commit: materialization + aliases + adopt --auto + task-type inference
 
 ---
 

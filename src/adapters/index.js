@@ -46,6 +46,29 @@ function readUrl(atemUrl, paths) {
 }
 
 function writeUrl(atemUrl, content, paths, opts = {}) {
+  // Phase B: lazy materialization on writes to a synthetic id whose
+  // session dir doesn't exist yet. Run before url.resolve so the
+  // post-materialization resolve hits a real dir.
+  const preParsed = url.parseUrl(atemUrl);
+  if (preParsed) {
+    let candidate = preParsed.target;
+    if (candidate === 'current') {
+      candidate = url.getActiveTaskId(paths) || candidate;
+    } else {
+      // Alias dereference for the materialization check too.
+      const aliased = require('../aliases.js').resolveAlias(paths, candidate);
+      if (aliased) candidate = aliased;
+    }
+    if (synthetic.isSyntheticId(candidate)) {
+      const pathLib = require('node:path');
+      const sessionDir = pathLib.join(paths.harnessDir, 'sessions', candidate);
+      if (!fs.existsSync(sessionDir)) {
+        const { materializeSyntheticTask } = require('../materialize.js');
+        materializeSyntheticTask(candidate, paths, opts.materialize || {});
+      }
+    }
+  }
+
   const result = url.resolve(atemUrl, paths);
   if (result.kind === 'error') {
     // Allow writes to artifacts whose file is allowed-but-missing.
@@ -71,7 +94,9 @@ function writeUrl(atemUrl, content, paths, opts = {}) {
     if (!fname) {
       throw new Error(`atem:// write to unknown artifact alias: ${alias}`);
     }
-    const taskId = parsed.target === 'current' ? url.getActiveTaskId(paths) : parsed.target;
+    let taskId = parsed.target === 'current' ? url.getActiveTaskId(paths) : parsed.target;
+    const aliased = require('../aliases.js').resolveAlias(paths, taskId);
+    if (aliased) taskId = aliased;
     if (!taskId) throw new Error('atem:// write: no active session');
     const pathLib = require('node:path');
     localPath = pathLib.join(paths.harnessDir, 'sessions', taskId, fname);

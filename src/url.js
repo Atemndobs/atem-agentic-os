@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const synthetic = require('./synthetic.js');
+const aliases = require('./aliases.js');
 
 const ARTIFACT_ALIASES = {
   brief: 'brief.md',
@@ -185,6 +186,12 @@ function resolve(url, paths) {
   } else {
     taskId = parsed.target;
   }
+
+  // Alias dereference (Phase B). The alias table maps human-friendly
+  // names to either a synthetic id or a TASK-N id. We do at most one
+  // hop to avoid alias-of-alias cycles.
+  const aliasTarget = aliases.resolveAlias(paths, taskId);
+  if (aliasTarget) taskId = aliasTarget;
 
   // Synthetic task ids (`<provider>:<id>`) take precedence over the path
   // safety check below — colons are allowed in this form.

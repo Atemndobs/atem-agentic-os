@@ -76,6 +76,29 @@ function syncCurrentPointer(paths) {
   return currentLink;
 }
 
+function syncAliases(paths) {
+  // For every alias → target mapping, place a symlink under the
+  // handles root so `~/.atem/handles/<alias>` resolves to the same
+  // task-handle dir as the underlying task id. Phase B (T B.7).
+  let table;
+  try { table = require('./aliases.js').readAliases(paths); } catch { return []; }
+  const root = getHandlesRoot();
+  if (!fs.existsSync(root)) return [];
+  const created = [];
+  for (const [alias, target] of Object.entries(table)) {
+    if (!alias || !target) continue;
+    if (alias === 'current') continue; // reserved
+    const aliasLink = path.join(root, alias);
+    const targetDir = path.join(root, target);
+    if (!fs.existsSync(targetDir)) continue;
+    try {
+      ensureSymlink(targetDir, aliasLink);
+      created.push(alias);
+    } catch { /* best effort */ }
+  }
+  return created;
+}
+
 function syncAll(paths) {
   const root = path.join(paths.harnessDir, 'sessions');
   if (!fs.existsSync(root)) return [];
@@ -84,6 +107,7 @@ function syncAll(paths) {
     .map((e) => e.name);
   for (const taskId of tasks) syncTaskHandles(paths, taskId);
   syncCurrentPointer(paths);
+  syncAliases(paths);
   return tasks;
 }
 
@@ -130,6 +154,7 @@ module.exports = {
   getHandlesRoot,
   syncTaskHandles,
   syncCurrentPointer,
+  syncAliases,
   syncAll,
   listHandles,
   validate,
