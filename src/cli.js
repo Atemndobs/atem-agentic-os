@@ -13,6 +13,7 @@ const PROVIDERS = new Set([
   'codex',
   'opencode',
   'openrouter',
+  'omp',
   'local-model',
   'manual',
 ]);
@@ -1269,6 +1270,153 @@ function getCodexWorkspaceRoots() {
   }
 }
 
+// --- omp (oh-my-pi) detection ---------------------------------------------
+// omp stores sessions as JSONL under ~/.omp/agent/sessions/<encoded-cwd>/<id>.jsonl
+// First line of each file is a SessionHeader containing the authoritative cwd.
+// See docs/research/omp-session-layout.md (T1.1).
+
+function getOmpAgentDir() {
+  return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.omp', 'agent');
+}
+
+function getOmpSessionsRoot() {
+  return path.join(getOmpAgentDir(), 'sessions');
+}
+
+function readOmpSessionHeader(filePath) {
+  // Header is the first JSONL line; read just enough to parse it.
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(8192);
+    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const chunk = buf.slice(0, bytesRead).toString('utf8');
+    const nl = chunk.indexOf('\n');
+    const firstLine = nl === -1 ? chunk : chunk.slice(0, nl);
+    if (!firstLine.trim()) return null;
+    const parsed = JSON.parse(firstLine);
+    if (!parsed || parsed.type !== 'session') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function listOmpSessionFiles({ since } = {}) {
+  const root = getOmpSessionsRoot();
+  if (!fs.existsSync(root)) return [];
+  const out = [];
+  let dirs;
+  try {
+    dirs = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of dirs) {
+    if (!entry.isDirectory()) continue;
+    const subdir = path.join(root, entry.name);
+    let files;
+    try {
+      files = fs.readdirSync(subdir);
+    } catch {
+      continue;
+    }
+    for (const name of files) {
+      if (!name.endsWith('.jsonl')) continue;
+      const full = path.join(subdir, name);
+      let stat;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (since && stat.mtimeMs < since) continue;
+      out.push({ file: full, encodedDir: entry.name, mtimeMs: stat.mtimeMs });
+    }
+  }
+  return out;
+}
+
+function getOmpProcesses(processLines = getProcessLines()) {
+  // Match the omp binary directly. Guard against false positives like
+  // `composer`, `compose`, `comp`, etc. by requiring a word boundary.
+  return processLines.filter((entry) => /(^|\/)omp(\s|$)/.test(entry.command));
+}
+
+function getOmpProcessCwd(pid) {
+  // macOS + Linux: lsof prints the cwd in `n`-prefixed lines.
+  try {
+    const out = execSync(`lsof -p ${pid} -d cwd -Fn 2>/dev/null`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of out.split('\n')) {
+      if (line.startsWith('n')) return line.slice(1).trim();
+    }
+  } catch {
+    // best-effort
+  }
+  // Linux fallback.
+  try {
+    return fs.readlinkSync(`/proc/${pid}/cwd`);
+  } catch {
+    return '';
+  }
+}
+
+function getOmpSessions(processLines = getProcessLines()) {
+  // Combine: (a) recently-modified jsonl files under the omp sessions root,
+  // (b) live `omp` processes. A session is "live" when an omp pid's cwd
+  // matches its header.cwd. Headers are the authoritative source for cwd
+  // (the encoded dir name is lossy).
+  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+  const candidateFiles = listOmpSessionFiles({ since: Date.now() - TWELVE_HOURS });
+  if (candidateFiles.length === 0 && getOmpProcesses(processLines).length === 0) {
+    return [];
+  }
+
+  const procs = getOmpProcesses(processLines).map((p) => ({
+    pid: p.pid,
+    command: p.command,
+    cwd: getOmpProcessCwd(p.pid),
+  }));
+
+  const sessions = [];
+  for (const cand of candidateFiles) {
+    const header = readOmpSessionHeader(cand.file);
+    if (!header) continue;
+    const cwd = header.cwd || '';
+    const matchingProc = procs.find((p) => p.cwd && cwd && path.resolve(p.cwd) === path.resolve(cwd));
+    sessions.push({
+      sessionId: header.id || path.basename(cand.file, '.jsonl'),
+      cwd,
+      title: header.title || '',
+      startedAt: header.timestamp ? Date.parse(header.timestamp) : 0,
+      mtimeMs: cand.mtimeMs,
+      sessionFile: cand.file,
+      encodedDir: cand.encodedDir,
+      pid: matchingProc ? matchingProc.pid : null,
+      live: !!matchingProc,
+    });
+  }
+
+  // Surface omp processes that have no on-disk session yet (rare, but
+  // possible just after launch). Match nothing → still report the process.
+  for (const p of procs) {
+    if (sessions.some((s) => s.pid === p.pid)) continue;
+    sessions.push({
+      sessionId: 'unknown',
+      cwd: p.cwd || 'unknown',
+      title: '',
+      startedAt: 0,
+      mtimeMs: 0,
+      sessionFile: '',
+      encodedDir: '',
+      pid: p.pid,
+      live: true,
+    });
+  }
+
+  sessions.sort((a, b) => (b.live - a.live) || (b.mtimeMs - a.mtimeMs));
+  return sessions;
+}
+
 function printExternalProviderActivity(repoFilter = '') {
   const signals = collectExternalProviderSignals(repoFilter);
   const {
@@ -1278,6 +1426,7 @@ function printExternalProviderActivity(repoFilter = '') {
     cursorProcesses,
     opencodeProcesses,
     openrouterProcesses,
+    ompSessions,
   } = signals;
   const codexDesktopServers = codexServers.filter((entry) => entry.command.includes('/Applications/Codex.app'));
   const codexExtensionServers = codexServers.filter((entry) => !entry.command.includes('/Applications/Codex.app'));
@@ -1286,7 +1435,8 @@ function printExternalProviderActivity(repoFilter = '') {
     codexServers.length +
     cursorProcesses.length +
     opencodeProcesses.length +
-    openrouterProcesses.length;
+    openrouterProcesses.length +
+    (ompSessions ? ompSessions.length : 0);
 
   console.log('');
   if (repoFilter) {
@@ -1306,6 +1456,7 @@ function printExternalProviderActivity(repoFilter = '') {
     [`${ICONS.provider} cursor`, fmt(cursorProcesses.length, 'process(es)')],
     [`${ICONS.provider} opencode`, fmt(opencodeProcesses.length, 'process(es)')],
     [`${ICONS.provider} openrouter`, fmt(openrouterProcesses.length, 'process(es)')],
+    [`${ICONS.provider} omp`, fmt((ompSessions || []).length, 'session(s)')],
   ];
   console.log(renderTable(['Provider', 'Status'], summaryRows));
 
@@ -1320,6 +1471,10 @@ function printExternalProviderActivity(repoFilter = '') {
   for (const p of cursorProcesses.slice(0, 5)) detailRows.push(['cursor', `pid ${p.pid}`, '', '']);
   for (const p of opencodeProcesses.slice(0, 5)) detailRows.push(['opencode', `pid ${p.pid}`, '', '']);
   for (const p of openrouterProcesses.slice(0, 5)) detailRows.push(['openrouter', `pid ${p.pid}`, '', '']);
+  for (const s of (ompSessions || []).slice(0, 10)) {
+    const label = s.live ? (s.pid ? `pid ${s.pid} live` : 'live') : 'recent';
+    detailRows.push(['omp', label, s.title || s.sessionId, s.cwd]);
+  }
   if (detailRows.length > 0) {
     console.log('');
     console.log(renderTable(['Provider', 'Signal', 'Count', 'Path'], detailRows));
@@ -1363,6 +1518,10 @@ function filterSignalsByRepo(signals, repoRoot) {
     entry.command.includes(repoRoot)
   );
 
+  const filteredOmp = (signals.ompSessions || []).filter((session) =>
+    isPathWithinRepo(session.cwd, repoRoot)
+  );
+
   return {
     claudeSessions: filteredClaude,
     codexServers: filteredCodexServers,
@@ -1371,6 +1530,7 @@ function filterSignalsByRepo(signals, repoRoot) {
     cursorProcesses: filteredCursor,
     opencodeProcesses: filteredOpenCode,
     openrouterProcesses: filteredOpenRouter,
+    ompSessions: filteredOmp,
   };
 }
 
@@ -1398,6 +1558,9 @@ function collectExternalProviderSignals(repoFilter = '') {
     processLines.filter((entry) => /openrouter/i.test(entry.command)),
     (entry) => [entry.pid, entry.command].join('|')
   );
+  const ompSessions = uniqueBy(getOmpSessions(processLines), (s) =>
+    [s.pid || '', s.sessionFile, s.cwd].join('|')
+  );
 
   const signals = {
     claudeSessions,
@@ -1407,6 +1570,7 @@ function collectExternalProviderSignals(repoFilter = '') {
     cursorProcesses,
     opencodeProcesses,
     openrouterProcesses,
+    ompSessions,
   };
 
   if (!repoFilter) return signals;
@@ -1697,6 +1861,66 @@ function buildHandoffPrompt(taskId, targetProvider = null, paths = null, targetR
   ].join('\n');
 }
 
+// AGENTS.md is the rule format omp + codex both honor in the repo root.
+// We mark our block so we never clobber human-authored content.
+const AGENTS_MD_BEGIN = '<!-- atem:agents:begin -->';
+const AGENTS_MD_END = '<!-- atem:agents:end -->';
+
+function buildAgentsMdBlock(taskId, paths, targetRepo, taskType, provider) {
+  const sessionRel = path.relative(targetRepo || process.cwd(), path.join(paths.harnessDir, 'sessions', taskId)) || `.harness/sessions/${taskId}`;
+  return [
+    AGENTS_MD_BEGIN,
+    '# ATEM Session Contract',
+    '',
+    'This repository is participating in an ATEM session-handoff workflow.',
+    `Active task: \`${taskId}\` (type: \`${taskType}\`)${provider ? `, current provider: \`${provider}\`` : ''}.`,
+    '',
+    '## Before doing anything',
+    '',
+    'Read these files first:',
+    `- \`${sessionRel}/brief.md\` — what this task is`,
+    `- \`${sessionRel}/state.md\` — current state`,
+    `- \`${sessionRel}/handoff.md\` — what the previous provider left for you`,
+    `- \`${sessionRel}/next.md\` — what to do next`,
+    `- \`${sessionRel}/decisions.md\` — past decisions you must respect`,
+    '',
+    '## Repository boundary',
+    '',
+    `Only modify files inside \`${targetRepo || '(target repo)'}\`. Never touch sibling repos or sibling worktrees.`,
+    '',
+    '## Before stopping',
+    '',
+    'Update the session files (`handoff.md`, `state.md`, `next.md`, `log.md`, and `decisions.md` when relevant).',
+    'Never end without updating `handoff.md`.',
+    '',
+    `Managed by ATEM. Edit content above/below this block, but leave this block intact — \`atem handoff\` regenerates it.`,
+    AGENTS_MD_END,
+    '',
+  ].join('\n');
+}
+
+function writeAgentsMd(targetRepo, taskId, paths, taskType, provider) {
+  if (!targetRepo) return null;
+  if (!fs.existsSync(targetRepo)) return null;
+  const dest = path.join(targetRepo, 'AGENTS.md');
+  const block = buildAgentsMdBlock(taskId, paths, targetRepo, taskType, provider);
+  let next;
+  if (fs.existsSync(dest)) {
+    const existing = readFile(dest);
+    if (existing.includes(AGENTS_MD_BEGIN) && existing.includes(AGENTS_MD_END)) {
+      const before = existing.slice(0, existing.indexOf(AGENTS_MD_BEGIN));
+      const after = existing.slice(existing.indexOf(AGENTS_MD_END) + AGENTS_MD_END.length).replace(/^\n+/, '');
+      next = before + block + after;
+    } else {
+      next = existing.replace(/\n*$/, '\n\n') + block;
+    }
+  } else {
+    next = block;
+  }
+  writeFile(dest, next);
+  return dest;
+}
+
 function commandHandoff(gitRoot, args) {
   const taskId = args[0];
   if (!taskId) {
@@ -1713,7 +1937,15 @@ function commandHandoff(gitRoot, args) {
   const repoFlagIndex = args.indexOf('--repo');
   const targetRepo = repoFlagIndex >= 0 ? args[repoFlagIndex + 1] : null;
   if (repoFlagIndex >= 0 && !targetRepo) {
-    throw new Error('Usage: atem handoff <task-id> [--to <provider>] [--repo <repo-path>]');
+    throw new Error('Usage: atem handoff <task-id> [--to <provider>] [--repo <repo-path>] [--from <provider> [--omp-cwd PATH|--omp-session ID|--omp-file PATH]]');
+  }
+
+  // --from omp: ingest live omp state into ATEM session files before
+  // generating the handoff prompt. Other providers may follow.
+  const fromIdx = args.indexOf('--from');
+  const fromProvider = fromIdx >= 0 ? args[fromIdx + 1] : null;
+  if (fromIdx >= 0 && !fromProvider) {
+    throw new Error('Usage: atem handoff <task-id> --from <provider>');
   }
 
   const paths = resolveActivePaths(gitRoot);
@@ -1734,8 +1966,69 @@ function commandHandoff(gitRoot, args) {
     resolvedTargetRepo = readSessionTargetRepository(files);
   }
 
+  if (fromProvider === 'omp') {
+    const { adapters: registry } = require('./adapters/index.js');
+    const ompCwd = (() => {
+      const i = args.indexOf('--omp-cwd');
+      return i >= 0 ? args[i + 1] : null;
+    })();
+    const ompSessionId = (() => {
+      const i = args.indexOf('--omp-session');
+      return i >= 0 ? args[i + 1] : null;
+    })();
+    const ompFile = (() => {
+      const i = args.indexOf('--omp-file');
+      return i >= 0 ? args[i + 1] : null;
+    })();
+    const cwd = ompCwd || resolvedTargetRepo || process.cwd();
+    registry.omp.ingest(taskId, {
+      sessionFile: ompFile,
+      sessionId: ompSessionId,
+      cwd,
+    });
+  }
+
   const taskType = resolveTaskTypeFromSessionFiles(files);
+
+  // Drop AGENTS.md at the target repo when handing off TO a provider that
+  // honors it (omp + codex). Idempotent — only replaces our marked block.
+  if (provider && (provider === 'omp' || provider === 'codex') && resolvedTargetRepo) {
+    const dest = writeAgentsMd(resolvedTargetRepo, taskId, paths, taskType, provider);
+    if (dest) {
+      console.error(`# ATEM: wrote handoff block to ${dest}`);
+    }
+  }
+
   console.log(buildHandoffPrompt(taskId, provider, paths, resolvedTargetRepo, taskType));
+}
+
+function commandIngestOmp(gitRoot, args) {
+  const taskId = args[0];
+  if (!taskId) {
+    throw new Error('Usage: atem ingest-omp <task-id> [--cwd PATH | --session-id ID | --file PATH]');
+  }
+  const paths = resolveActivePaths(gitRoot);
+  ensureHarnessReady(paths);
+  requireSession(paths, taskId);
+  const cwdIdx = args.indexOf('--cwd');
+  const idIdx = args.indexOf('--session-id');
+  const fileIdx = args.indexOf('--file');
+  const { adapters: registry } = require('./adapters/index.js');
+  const result = registry.omp.ingest(taskId, {
+    cwd: cwdIdx >= 0 ? args[cwdIdx + 1] : null,
+    sessionId: idIdx >= 0 ? args[idIdx + 1] : null,
+    sessionFile: fileIdx >= 0 ? args[fileIdx + 1] : null,
+  });
+  console.log(`${PRODUCT_NAME} ingest-omp`);
+  console.log(`Task: ${taskId}`);
+  console.log(`omp session: ${result.sessionId}`);
+  console.log(`Source file: ${result.sessionFile}`);
+  console.log(`cwd: ${result.cwd}`);
+  if (result.model) console.log(`Model: ${result.model}`);
+  if (result.mode && result.mode !== 'none') console.log(`Mode: ${result.mode}`);
+  if (result.firstTask) console.log(`First task: ${firstNonEmptyLine(result.firstTask).slice(0, 200)}`);
+  if (result.summary) console.log(`Summary: ${firstNonEmptyLine(result.summary).slice(0, 200)}`);
+  if (result.pausedMidTool) console.log('Warning: omp session was paused mid tool-call.');
 }
 
 function commandClose(gitRoot, args) {
@@ -1945,6 +2238,38 @@ function commandDoctor(gitRoot) {
     );
   } else {
     report('OK', 'codex workspace roots look consistent');
+  }
+
+  // omp checks (T1.8)
+  const ompSessions = signals.ompSessions || [];
+  const ompLive = ompSessions.filter((s) => s.live);
+  if (ompSessions.length === 0) {
+    report('OK', 'no omp activity detected');
+  } else {
+    report('OK', `omp: ${ompSessions.length} session(s), ${ompLive.length} live`);
+    for (const s of ompSessions) {
+      if (s.live && !s.sessionFile) {
+        report('WARN', `omp live pid ${s.pid} has no session jsonl yet at cwd ${s.cwd}`);
+      }
+      if (s.sessionFile && !s.cwd) {
+        report('WARN', `omp session ${s.sessionId} has no cwd in header`);
+      }
+    }
+  }
+
+  // If current task is routed to omp, the target repo should have AGENTS.md
+  // with our managed block — otherwise omp won't see the contract.
+  const currentProvider = getSection(currentSession, 'Active Provider') || '';
+  const targetRepoLine = getSection(currentSession, 'Target Repository') || '';
+  if (currentProvider === 'omp' && targetRepoLine && targetRepoLine !== 'unknown') {
+    const agentsPath = path.join(targetRepoLine, 'AGENTS.md');
+    if (!fs.existsSync(agentsPath)) {
+      report('WARN', `omp routed but ${agentsPath} missing; run \`atem handoff <task> --to omp\` to write it`);
+    } else if (!readFile(agentsPath).includes(AGENTS_MD_BEGIN)) {
+      report('WARN', `AGENTS.md at ${agentsPath} has no ATEM block; run \`atem handoff <task> --to omp\``);
+    } else {
+      report('OK', `AGENTS.md present with ATEM block at ${targetRepoLine}`);
+    }
   }
   flush();
 }
@@ -3527,6 +3852,9 @@ function main(argv) {
         break;
       case 'goals':
         commandGoals(gitRoot, args);
+        break;
+      case 'ingest-omp':
+        commandIngestOmp(gitRoot, args);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
