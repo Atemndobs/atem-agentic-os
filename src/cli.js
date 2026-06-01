@@ -43,24 +43,73 @@ const GOAL_DOC_CANDIDATES = [
   'docs/backlog.md',
 ];
 
+const USE_COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR;
+const ANSI = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m',
+};
+function paint(text, color) {
+  if (!USE_COLOR || !color) return text;
+  const code = ANSI[color];
+  return code ? `${code}${text}${ANSI.reset}` : text;
+}
+// Strip ANSI for width calculations.
+function visibleLength(s) {
+  return String(s).replace(/\x1b\[[0-9;]*m/g, '').length;
+}
+
+const ICONS = {
+  ok: '✓',
+  warn: '⚠',
+  fail: '✗',
+  fix: '🔧',
+  skip: '⏭',
+  archive: '📦',
+  trash: '🗑',
+  provider: '◆',
+  none: '·',
+  task: '▸',
+  repo: '📁',
+  missing: '✗',
+};
+
+function levelBadge(level) {
+  switch (level) {
+    case 'OK':   return `${ICONS.ok} ${paint('[OK]', 'green')}`;
+    case 'WARN': return `${ICONS.warn} ${paint('[WARN]', 'yellow')}`;
+    case 'FAIL': return `${ICONS.fail} ${paint('[FAIL]', 'red')}`;
+    default:     return paint(`[${level}]`, 'gray');
+  }
+}
+
 function renderTable(headers, rows) {
   if (!Array.isArray(rows) || rows.length === 0) return '';
   const cols = headers.length;
   const stringRows = rows.map((r) => r.map((c) => (c === undefined || c === null ? '' : String(c))));
   const widths = headers.map((h, i) => {
-    let w = String(h).length;
+    let w = visibleLength(h);
     for (const r of stringRows) {
       const cell = r[i] || '';
       for (const line of cell.split('\n')) {
-        if (line.length > w) w = line.length;
+        const vl = visibleLength(line);
+        if (vl > w) w = vl;
       }
     }
     return w;
   });
-  const top = '┌' + widths.map((w) => '─'.repeat(w + 2)).join('┬') + '┐';
-  const mid = '├' + widths.map((w) => '─'.repeat(w + 2)).join('┼') + '┤';
-  const bot = '└' + widths.map((w) => '─'.repeat(w + 2)).join('┴') + '┘';
-  const pad = (s, w) => s + ' '.repeat(w - s.length);
+  const sep = USE_COLOR ? paint('│', 'gray') : '│';
+  const top = paint('┌' + widths.map((w) => '─'.repeat(w + 2)).join('┬') + '┐', 'gray');
+  const mid = paint('├' + widths.map((w) => '─'.repeat(w + 2)).join('┼') + '┤', 'gray');
+  const bot = paint('└' + widths.map((w) => '─'.repeat(w + 2)).join('┴') + '┘', 'gray');
+  const pad = (s, w) => s + ' '.repeat(Math.max(0, w - visibleLength(s)));
   const renderRow = (cells) => {
     // support multi-line cells
     const split = cells.map((c) => (c || '').split('\n'));
@@ -68,11 +117,12 @@ function renderTable(headers, rows) {
     const lines = [];
     for (let h = 0; h < height; h += 1) {
       const parts = split.map((s, i) => pad(s[h] || '', widths[i]));
-      lines.push('│ ' + parts.join(' │ ') + ' │');
+      lines.push(`${sep} ` + parts.join(` ${sep} `) + ` ${sep}`);
     }
     return lines.join('\n');
   };
-  const header = '│ ' + headers.map((h, i) => pad(String(h), widths[i])).join(' │ ') + ' │';
+  const styledHeaders = headers.map((h) => paint(String(h), 'bold'));
+  const header = `${sep} ` + styledHeaders.map((h, i) => pad(h, widths[i])).join(` ${sep} `) + ` ${sep}`;
   const body = stringRows.map((r) => renderRow(r.slice(0, cols))).join('\n');
   return [top, header, mid, body, bot].join('\n');
 }
@@ -1245,14 +1295,17 @@ function printExternalProviderActivity(repoFilter = '') {
     console.log(`Machine-wide provider activity (${totalDetected} signals):`);
   }
 
+  const fmt = (count, label) => count === 0
+    ? `${ICONS.none} ${paint('none detected', 'gray')}`
+    : `${ICONS.ok} ${paint(`${count} ${label}`, 'green')}`;
   const summaryRows = [
-    ['claude-code', claudeSessions.length === 0 ? 'none detected' : `${claudeSessions.length} active session(s)`],
-    ['codex', (codexServers.length === 0 && codexRoots.length === 0)
-      ? 'none detected'
-      : `${codexServers.length} app-server process(es)`],
-    ['cursor', cursorProcesses.length === 0 ? 'none detected' : `${cursorProcesses.length} process(es)`],
-    ['opencode', opencodeProcesses.length === 0 ? 'none detected' : `${opencodeProcesses.length} process(es)`],
-    ['openrouter', openrouterProcesses.length === 0 ? 'none detected' : `${openrouterProcesses.length} process(es)`],
+    [`${ICONS.provider} claude-code`, fmt(claudeSessions.length, 'active session(s)')],
+    [`${ICONS.provider} codex`, (codexServers.length === 0 && codexRoots.length === 0)
+      ? `${ICONS.none} ${paint('none detected', 'gray')}`
+      : fmt(codexServers.length, 'app-server process(es)')],
+    [`${ICONS.provider} cursor`, fmt(cursorProcesses.length, 'process(es)')],
+    [`${ICONS.provider} opencode`, fmt(opencodeProcesses.length, 'process(es)')],
+    [`${ICONS.provider} openrouter`, fmt(openrouterProcesses.length, 'process(es)')],
   ];
   console.log(renderTable(['Provider', 'Status'], summaryRows));
 
@@ -1738,7 +1791,7 @@ function commandDoctor(gitRoot) {
     if (rows.length > 0) console.log(renderTable(['Level', 'Check'], rows));
   };
   const report = (level, message) => {
-    rows.push([`[${level}]`, message]);
+    rows.push([levelBadge(level), message]);
   };
 
   if (!fs.existsSync(paths.harnessDir)) {
@@ -1968,10 +2021,10 @@ function commandArchive(gitRoot, args) {
     const rows = [];
     for (const { id, repo } of items) {
       if (dryRun) {
-        rows.push(['would-archive', id, `repo missing: ${repo}`]);
+        rows.push([`${ICONS.archive} ${paint('would-archive', 'yellow')}`, paint(id, 'bold'), `${ICONS.missing} ${paint(`repo missing: ${repo}`, 'red')}`]);
       } else {
         archiveOneSession(paths, id);
-        rows.push(['archived', id, repo]);
+        rows.push([`${ICONS.archive} ${paint('archived', 'green')}`, paint(id, 'bold'), paint(repo, 'gray')]);
       }
     }
     console.log(renderTable(['Action', 'Task', 'Repo'], rows));
@@ -2087,7 +2140,10 @@ function commandRepos(args) {
     if (repos.length === 0) {
       console.log('(no repos)');
     } else {
-      const rows = repos.map((r) => [fs.existsSync(r) ? 'ok' : 'MISSING', r]);
+      const rows = repos.map((r) => [
+        fs.existsSync(r) ? `${ICONS.ok} ${paint('ok', 'green')}` : `${ICONS.missing} ${paint('MISSING', 'red')}`,
+        `${ICONS.repo} ${r}`,
+      ]);
       console.log(renderTable(['Status', 'Repository'], rows));
     }
     return;
@@ -2178,7 +2234,7 @@ function commandMigrateTasks(gitRoot, args) {
     const sessionDir = path.join(sessionsDir, taskId);
     const files = getSessionFileMap(sessionDir);
     if (!fs.existsSync(files.brief) || !fs.existsSync(files.state)) {
-      rows.push(['[SKIP]', taskId, '', 'missing brief.md or state.md']);
+      rows.push([`${ICONS.skip} ${paint('[SKIP]', 'gray')}`, paint(taskId, 'bold'), '', paint('missing brief.md or state.md', 'gray')]);
       continue;
     }
     let brief = readFile(files.brief);
@@ -2254,9 +2310,19 @@ function commandMigrateTasks(gitRoot, args) {
         writeFile(files.state, state);
       }
       changed += 1;
-      rows.push(['[FIX]', taskId, resolvedType, `${notes.join('; ')}${repoNote ? '  ⚠ ' + repoNote : ''}`]);
+      rows.push([
+        `${ICONS.fix} ${paint('[FIX]', 'cyan')}`,
+        paint(taskId, 'bold'),
+        paint(resolvedType, 'magenta'),
+        `${notes.join('; ')}${repoNote ? `  ${ICONS.warn} ${paint(repoNote, 'yellow')}` : ''}`,
+      ]);
     } else if (repoNote) {
-      rows.push(['[WARN]', taskId, resolvedType, repoNote]);
+      rows.push([
+        `${ICONS.warn} ${paint('[WARN]', 'yellow')}`,
+        paint(taskId, 'bold'),
+        paint(resolvedType, 'magenta'),
+        paint(repoNote, 'yellow'),
+      ]);
     } else {
       okCount += 1;
     }
