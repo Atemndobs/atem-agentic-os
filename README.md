@@ -17,6 +17,11 @@ Future versions may add a `atem` command alias and migrate state to `~/.atem/`.
 - `atem route <task-id> --to <provider> [--repo <repo>]`
 - `atem handoff <task-id> [--to <provider>] [--repo <repo>]`
 - `atem snapshot <task-id> [--repo <repo>]`
+- `atem snapshot-diff <task-id> [<snap-a> <snap-b>]`
+- `atem repos <task-id> <list|add> [path]`
+- `atem adapter <provider> <read|update|log|decision|validation|touched> <task-id> [...]`
+- `atem archive <task-id>`
+- `atem archive --broken [--dry-run]`
 - `atem doctor`
 - `atem clean <task-id>`
 
@@ -29,3 +34,8 @@ Future versions may add a `atem` command alias and migrate state to `~/.atem/`.
 - `atem worktree start <task-id> --repo <repo> --branch <branch> [--path <path>]`
 - `atem ready <task-id> --repo <repo> [--pr <url>]`
 - `atem integrate <task-id> --repo <repo>`
+
+## Docs
+- `docs/commands.md`: command reference
+- `docs/examples.md`: runnable examples including demo flow
+- `docs/provider-contract.md`: provider-neutral workflow contract

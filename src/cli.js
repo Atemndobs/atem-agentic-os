@@ -33,6 +33,49 @@ const PROJECT_REQUIRED_FILES = [
   'worktrees.md',
   'integration-queue.md',
 ];
+const GOAL_DOC_CANDIDATES = [
+  'README.md',
+  'TASKS.md',
+  'TODO.md',
+  'docs/goals.md',
+  'docs/roadmap.md',
+  'docs/todo.md',
+  'docs/backlog.md',
+];
+
+function renderTable(headers, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const cols = headers.length;
+  const stringRows = rows.map((r) => r.map((c) => (c === undefined || c === null ? '' : String(c))));
+  const widths = headers.map((h, i) => {
+    let w = String(h).length;
+    for (const r of stringRows) {
+      const cell = r[i] || '';
+      for (const line of cell.split('\n')) {
+        if (line.length > w) w = line.length;
+      }
+    }
+    return w;
+  });
+  const top = '┌' + widths.map((w) => '─'.repeat(w + 2)).join('┬') + '┐';
+  const mid = '├' + widths.map((w) => '─'.repeat(w + 2)).join('┼') + '┤';
+  const bot = '└' + widths.map((w) => '─'.repeat(w + 2)).join('┴') + '┘';
+  const pad = (s, w) => s + ' '.repeat(w - s.length);
+  const renderRow = (cells) => {
+    // support multi-line cells
+    const split = cells.map((c) => (c || '').split('\n'));
+    const height = Math.max(...split.map((s) => s.length));
+    const lines = [];
+    for (let h = 0; h < height; h += 1) {
+      const parts = split.map((s, i) => pad(s[h] || '', widths[i]));
+      lines.push('│ ' + parts.join(' │ ') + ' │');
+    }
+    return lines.join('\n');
+  };
+  const header = '│ ' + headers.map((h, i) => pad(String(h), widths[i])).join(' │ ') + ' │';
+  const body = stringRows.map((r) => renderRow(r.slice(0, cols))).join('\n');
+  return [top, header, mid, body, bot].join('\n');
+}
 
 function nowStamp() {
   const d = new Date();
@@ -356,6 +399,49 @@ function parseStatusArgs(args) {
   }
 
   return { repoFilter };
+}
+
+function parseGoalsArgs(args, gitRoot) {
+  const usage = 'Usage: atem goals [--repo <repo-path>] [--files <a,b,c>] [--json]';
+  let repoPath = gitRoot ? path.resolve(gitRoot) : '';
+  let filesCsv = '';
+  let asJson = false;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--repo') {
+      const value = args[i + 1];
+      if (!value) throw new Error(usage);
+      repoPath = path.resolve(value);
+      i += 1;
+      continue;
+    }
+    if (token === '--files') {
+      const value = args[i + 1];
+      if (!value) throw new Error(usage);
+      filesCsv = value;
+      i += 1;
+      continue;
+    }
+    if (token === '--json') {
+      asJson = true;
+      continue;
+    }
+    if (token.startsWith('--')) {
+      throw new Error(`Unknown flag for goals: ${token}`);
+    }
+    throw new Error(usage);
+  }
+
+  if (!repoPath) {
+    throw new Error(usage);
+  }
+
+  const explicitFiles = filesCsv
+    ? filesCsv.split(',').map((item) => item.trim()).filter(Boolean)
+    : [];
+
+  return { repoPath, explicitFiles, asJson };
 }
 
 function initializeHarness(paths) {
@@ -745,12 +831,293 @@ function firstNonEmptyLine(value) {
     .find((line) => line.length > 0) || '';
 }
 
+function isPathInside(candidatePath, basePath) {
+  if (!candidatePath || !basePath) return false;
+  const resolvedCandidate = path.resolve(candidatePath);
+  const resolvedBase = path.resolve(basePath);
+  return resolvedCandidate === resolvedBase || resolvedCandidate.startsWith(`${resolvedBase}${path.sep}`);
+}
+
+function normalizeGoalText(value) {
+  return `${value || ''}`.replace(/\s+/g, ' ').trim();
+}
+
+function listGoalDocPaths(repoPath, explicitFiles = []) {
+  const candidates = explicitFiles.length > 0 ? explicitFiles : GOAL_DOC_CANDIDATES;
+  const docs = [];
+  for (const file of candidates) {
+    const absolutePath = path.isAbsolute(file) ? file : path.join(repoPath, file);
+    if (fs.existsSync(absolutePath) && fs.statSync(absolutePath).isFile()) {
+      docs.push(path.resolve(absolutePath));
+    }
+  }
+  return uniqueStrings(docs);
+}
+
+function extractGoalItemsFromMarkdown(content) {
+  const results = [];
+  const seen = new Set();
+  const lines = `${content || ''}`.split('\n');
+  const goalHeading = /\b(goal|goals|roadmap|todo|next|backlog|milestone)\b/i;
+  let inGoalSection = false;
+
+  const push = (text) => {
+    const normalized = normalizeGoalText(text);
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(normalized);
+  };
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^\s*#{1,6}\s+(.+)$/);
+    if (headingMatch) {
+      inGoalSection = goalHeading.test(headingMatch[1]);
+      continue;
+    }
+
+    const uncheckedMatch = line.match(/^\s*[-*]\s+\[ \]\s+(.+)$/);
+    if (uncheckedMatch) {
+      push(uncheckedMatch[1]);
+      continue;
+    }
+
+    const todoInlineMatch = line.match(/\bTODO\b[:\-\s]+(.+)$/i);
+    if (todoInlineMatch) {
+      push(todoInlineMatch[1]);
+      continue;
+    }
+
+    if (inGoalSection) {
+      const bulletMatch = line.match(/^\s*(?:[-*]|\d+\.)\s+(.+)$/);
+      if (bulletMatch) {
+        push(bulletMatch[1]);
+      }
+    }
+  }
+
+  return results;
+}
+
+function collectRepoGoals(repoPath, docPaths) {
+  const goals = [];
+  for (const docPath of docPaths) {
+    const content = readFile(docPath);
+    const items = extractGoalItemsFromMarkdown(content);
+    for (const text of items) {
+      goals.push({
+        text,
+        sourceFile: path.relative(repoPath, docPath) || path.basename(docPath),
+      });
+    }
+  }
+  return goals;
+}
+
+function collectActiveTasksForRepo(paths, repoPath) {
+  if (!fs.existsSync(paths.sessionsDir)) return [];
+  const entries = fs.readdirSync(paths.sessionsDir, { withFileTypes: true });
+  const tasks = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!/^TASK-\d+$/.test(entry.name)) continue;
+
+    const sessionDir = path.join(paths.sessionsDir, entry.name);
+    const files = getSessionFileMap(sessionDir);
+    if (!fs.existsSync(files.state) || !fs.existsSync(files.brief)) continue;
+
+    const state = readFile(files.state);
+    const brief = readFile(files.brief);
+    const { data: fm } = parseFrontmatter(state);
+
+    const status = normalizeGoalText(fm.status || getSection(state, 'Status') || 'active').toLowerCase();
+    if (status === 'complete' || status === 'archived') continue;
+
+    const targetRepo = fm.target_repo
+      || getSection(state, 'Target Repository')
+      || fm.repo
+      || getSection(state, 'Primary Repository');
+    const relatedWorkspaces = getSection(state, 'Related Workspaces')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('- '))
+      .map((line) => line.slice(2).trim())
+      .filter(Boolean);
+
+    const matchesRepo = isPathInside(targetRepo, repoPath)
+      || relatedWorkspaces.some((workspace) => isPathInside(workspace, repoPath));
+
+    if (!matchesRepo) continue;
+
+    const title = getSection(brief, 'Title') || getSection(brief, 'Goal') || entry.name;
+    const goal = getSection(brief, 'Goal') || title;
+    tasks.push({
+      taskId: entry.name,
+      title: normalizeGoalText(title),
+      goal: normalizeGoalText(goal),
+      taskType: normalizeTaskType(getSection(state, 'Task Type') || fm.task_type || ''),
+    });
+  }
+
+  return tasks;
+}
+
+function tokenizeForMatching(value) {
+  const stopwords = new Set([
+    'the', 'and', 'with', 'from', 'that', 'this', 'into', 'for', 'your', 'are', 'was', 'were',
+    'have', 'has', 'will', 'would', 'should', 'could', 'about', 'over', 'under', 'into', 'only',
+    'task', 'tasks', 'repo', 'project', 'app', 'apps', 'work', 'done', 'make', 'add',
+  ]);
+  return new Set(
+    `${value || ''}`
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length >= 4 && !stopwords.has(token))
+  );
+}
+
+function bestTaskMatch(goalText, tasks) {
+  const goalTokens = tokenizeForMatching(goalText);
+  if (goalTokens.size === 0 || tasks.length === 0) return null;
+
+  let best = null;
+  let bestScore = 0;
+  for (const task of tasks) {
+    const taskTokens = tokenizeForMatching(`${task.title} ${task.goal}`);
+    let score = 0;
+    for (const token of goalTokens) {
+      if (taskTokens.has(token)) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = task;
+    }
+  }
+
+  const threshold = goalTokens.size >= 3 ? 2 : 1;
+  if (!best || bestScore < threshold) return null;
+  return { task: best, score: bestScore };
+}
+
+function buildGoalsReportMarkdown(repoPath, docPaths, goals, tasks, unmatchedGoals, unmatchedTasks) {
+  const lines = [
+    '# ATEM Goal Drift Report',
+    '',
+    `- Repository: ${repoPath}`,
+    `- Generated: ${nowStamp()}`,
+    `- Goal docs scanned: ${docPaths.length}`,
+    `- Goals found: ${goals.length}`,
+    `- Active tasks in repo: ${tasks.length}`,
+    `- Untracked goals: ${unmatchedGoals.length}`,
+    `- Active tasks without goal match: ${unmatchedTasks.length}`,
+    '',
+    '## Goal Docs',
+  ];
+
+  if (docPaths.length === 0) {
+    lines.push('- (none found)');
+  } else {
+    for (const docPath of docPaths) {
+      lines.push(`- ${docPath}`);
+    }
+  }
+
+  lines.push('', '## Untracked Goals');
+  if (unmatchedGoals.length === 0) {
+    lines.push('- none');
+  } else {
+    for (const item of unmatchedGoals) {
+      const shortText = item.text.length > 90 ? `${item.text.slice(0, 87)}...` : item.text;
+      lines.push(`- [ ] ${item.text}`);
+      lines.push(`  - source: ${item.sourceFile}`);
+      lines.push(`  - suggested: atem start ${shellQuote(shortText)} --type implementation --repo ${shellQuote(repoPath)}`);
+    }
+  }
+
+  lines.push('', '## Active Tasks Without Goal Match');
+  if (unmatchedTasks.length === 0) {
+    lines.push('- none');
+  } else {
+    for (const task of unmatchedTasks) {
+      lines.push(`- ${task.taskId} (${task.taskType || 'unknown'}): ${task.title}`);
+    }
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
 function commandStatus(gitRoot, args = []) {
   const { repoFilter } = parseStatusArgs(args);
   console.log(`${PRODUCT_NAME} status`);
   console.log(PRODUCT_TAGLINE);
   printExternalProviderActivity(repoFilter);
   printRepoHarnessStatus(gitRoot);
+}
+
+function commandGoals(gitRoot, args = []) {
+  const { repoPath, explicitFiles, asJson } = parseGoalsArgs(args, gitRoot);
+  const paths = resolveActivePaths(gitRoot);
+  ensureHarnessReady(paths);
+
+  const docPaths = listGoalDocPaths(repoPath, explicitFiles);
+  const goals = collectRepoGoals(repoPath, docPaths);
+  const tasks = collectActiveTasksForRepo(paths, repoPath);
+
+  const matchedTaskIds = new Set();
+  const unmatchedGoals = [];
+  for (const goal of goals) {
+    const match = bestTaskMatch(goal.text, tasks);
+    if (!match) {
+      unmatchedGoals.push(goal);
+      continue;
+    }
+    matchedTaskIds.add(match.task.taskId);
+  }
+  const unmatchedTasks = tasks.filter((task) => !matchedTaskIds.has(task.taskId));
+
+  const reportsDir = path.join(paths.harnessDir, 'goals');
+  ensureDir(reportsDir);
+  const repoSlug = repoPath
+    .replace(/^[A-Za-z]:/, '')
+    .replace(/[\\/:\s]+/g, '_')
+    .replace(/^_+/, '');
+  const reportPath = path.join(reportsDir, `${repoSlug || 'repo'}-latest.md`);
+  const report = buildGoalsReportMarkdown(
+    repoPath,
+    docPaths,
+    goals,
+    tasks,
+    unmatchedGoals,
+    unmatchedTasks
+  );
+  writeFile(reportPath, report);
+
+  if (asJson) {
+    console.log(JSON.stringify({
+      repoPath,
+      docCount: docPaths.length,
+      goalCount: goals.length,
+      activeTaskCount: tasks.length,
+      untrackedGoalCount: unmatchedGoals.length,
+      unmatchedTaskCount: unmatchedTasks.length,
+      reportPath,
+      unmatchedGoals,
+      unmatchedTasks,
+    }, null, 2));
+    return;
+  }
+
+  console.log(`${PRODUCT_NAME} goals`);
+  console.log(`Repo: ${repoPath}`);
+  console.log(`Goal docs scanned: ${docPaths.length}`);
+  console.log(`Goals found: ${goals.length}`);
+  console.log(`Active tasks: ${tasks.length}`);
+  console.log(`Untracked goals: ${unmatchedGoals.length}`);
+  console.log(`Active tasks without goal match: ${unmatchedTasks.length}`);
+  console.log(`Report: ${reportPath}`);
 }
 
 function isPidAlive(pid) {
@@ -878,46 +1245,31 @@ function printExternalProviderActivity(repoFilter = '') {
     console.log(`Machine-wide provider activity (${totalDetected} signals):`);
   }
 
-  if (claudeSessions.length === 0) {
-    console.log('- claude-code: none detected');
-  } else {
-    console.log(`- claude-code: ${claudeSessions.length} active session(s)`);
-    for (const session of claudeSessions.slice(0, 10)) {
-      console.log(`  - pid ${session.pid} | ${session.entrypoint} | ${session.cwd}`);
-    }
-  }
+  const summaryRows = [
+    ['claude-code', claudeSessions.length === 0 ? 'none detected' : `${claudeSessions.length} active session(s)`],
+    ['codex', (codexServers.length === 0 && codexRoots.length === 0)
+      ? 'none detected'
+      : `${codexServers.length} app-server process(es)`],
+    ['cursor', cursorProcesses.length === 0 ? 'none detected' : `${cursorProcesses.length} process(es)`],
+    ['opencode', opencodeProcesses.length === 0 ? 'none detected' : `${opencodeProcesses.length} process(es)`],
+    ['openrouter', openrouterProcesses.length === 0 ? 'none detected' : `${openrouterProcesses.length} process(es)`],
+  ];
+  console.log(renderTable(['Provider', 'Status'], summaryRows));
 
-  if (codexServers.length === 0 && codexRoots.length === 0) {
-    console.log('- codex: none detected');
-  } else {
-    console.log(`- codex: ${codexServers.length} app-server process(es)`);
-    if (codexDesktopServers.length > 0) {
-      console.log(`  - codex app servers: ${codexDesktopServers.length}`);
-    }
-    if (codexExtensionServers.length > 0) {
-      console.log(`  - extension codex servers: ${codexExtensionServers.length}`);
-    }
-    if (codexRoots.length > 0) {
-      console.log(`  - active workspace root(s): ${codexRoots.join(', ')}`);
-    }
+  // Details table (only providers with signals)
+  const detailRows = [];
+  for (const s of claudeSessions.slice(0, 10)) {
+    detailRows.push(['claude-code', `pid ${s.pid}`, s.entrypoint, s.cwd]);
   }
-
-  if (cursorProcesses.length === 0) {
-    console.log('- cursor: none detected');
-  } else {
-    console.log(`- cursor: ${cursorProcesses.length} process(es)`);
-  }
-
-  if (opencodeProcesses.length === 0) {
-    console.log('- opencode: none detected');
-  } else {
-    console.log(`- opencode: ${opencodeProcesses.length} process(es)`);
-  }
-
-  if (openrouterProcesses.length === 0) {
-    console.log('- openrouter: none detected');
-  } else {
-    console.log(`- openrouter: ${openrouterProcesses.length} process(es)`);
+  if (codexDesktopServers.length > 0) detailRows.push(['codex', 'app servers', String(codexDesktopServers.length), '']);
+  if (codexExtensionServers.length > 0) detailRows.push(['codex', 'extension servers', String(codexExtensionServers.length), '']);
+  for (const root of codexRoots) detailRows.push(['codex', 'workspace root', '', root]);
+  for (const p of cursorProcesses.slice(0, 5)) detailRows.push(['cursor', `pid ${p.pid}`, '', '']);
+  for (const p of opencodeProcesses.slice(0, 5)) detailRows.push(['opencode', `pid ${p.pid}`, '', '']);
+  for (const p of openrouterProcesses.slice(0, 5)) detailRows.push(['openrouter', `pid ${p.pid}`, '', '']);
+  if (detailRows.length > 0) {
+    console.log('');
+    console.log(renderTable(['Provider', 'Signal', 'Count', 'Path'], detailRows));
   }
 }
 
@@ -1144,26 +1496,28 @@ function printRepoHarnessStatus(gitRoot) {
   const paths = resolveActivePaths(gitRoot);
   const repoPaths = gitRoot ? getRepoPaths(gitRoot) : null;
 
+  const ctxRows = [];
   if (gitRoot) {
-    console.log(`- git repo: ${gitRoot}`);
+    ctxRows.push(['git repo', gitRoot]);
   } else {
-    console.log('- no git repository detected from current directory');
+    ctxRows.push(['git repo', 'no git repository detected from current directory']);
   }
-
   if (paths.mode === 'global') {
-    console.log('- store mode: global handoff store (default)');
+    ctxRows.push(['store mode', 'global handoff store (default)']);
     if (repoPaths && fs.existsSync(repoPaths.harnessDir)) {
-      console.log(`- project handoff store detected but inactive: ${repoPaths.harnessDir}`);
-      console.log('- set ATEM_HARNESS_MODE=repo to use repo-local harness');
+      ctxRows.push(['project store (inactive)', repoPaths.harnessDir]);
+      ctxRows.push(['hint', 'set ATEM_HARNESS_MODE=repo to use repo-local harness']);
     }
-    console.log(`- ATEM state directory: ${paths.harnessDir}`);
+    ctxRows.push(['state dir', paths.harnessDir]);
   } else {
-    console.log('- store mode: project handoff store (ATEM_HARNESS_MODE=repo)');
-    console.log(`- ATEM state directory: ${paths.harnessDir}`);
+    ctxRows.push(['store mode', 'project handoff store (ATEM_HARNESS_MODE=repo)']);
+    ctxRows.push(['state dir', paths.harnessDir]);
   }
 
   if (!fs.existsSync(paths.harnessDir)) {
-    console.log('- active task: none');
+    ctxRows.push(['active task', 'none']);
+    console.log(renderTable(['Key', 'Value'], ctxRows));
+    console.log('active task: none');
     return;
   }
   ensureHarnessReady(paths);
@@ -1172,7 +1526,9 @@ function printRepoHarnessStatus(gitRoot) {
   const taskId = getSection(currentSession, 'Active Task ID') || 'None';
 
   if (taskId === 'None') {
-    console.log('- active task: none');
+    ctxRows.push(['active task', 'none']);
+    console.log(renderTable(['Key', 'Value'], ctxRows));
+    console.log('active task: none');
     return;
   }
 
@@ -1191,14 +1547,15 @@ function printRepoHarnessStatus(gitRoot) {
   const nextStep = firstNumberedItem(next) || getSection(handoff, 'Next Recommended Action') || 'None';
   const validationStatus = getSection(validation, 'Results') || 'None';
 
-  console.log(`- active task: ${taskId}`);
-  console.log(`- task type: ${taskType}`);
-  console.log(`- current provider: ${provider}`);
-  console.log(`- goal: ${goal}`);
-  console.log(`- status: ${status}`);
-  console.log(`- next step: ${nextStep}`);
-  console.log(`- files touched: ${filesTouched.replace(/\n+/g, '; ')}`);
-  console.log(`- validation: ${validationStatus.replace(/\n+/g, '; ')}`);
+  ctxRows.push(['active task', taskId]);
+  ctxRows.push(['task type', taskType]);
+  ctxRows.push(['current provider', provider]);
+  ctxRows.push(['goal', goal]);
+  ctxRows.push(['status', status]);
+  ctxRows.push(['next step', nextStep]);
+  ctxRows.push(['files touched', filesTouched.replace(/\n+/g, '; ')]);
+  ctxRows.push(['validation', validationStatus.replace(/\n+/g, '; ')]);
+  console.log(renderTable(['Key', 'Value'], ctxRows));
 }
 
 function buildHandoffPrompt(taskId, targetProvider = null, paths = null, targetRepo = null, taskType = DEFAULT_TASK_TYPE) {
@@ -1376,12 +1733,17 @@ function commandDoctor(gitRoot) {
   console.log(`${PRODUCT_NAME} doctor`);
   console.log(PRODUCT_TAGLINE);
 
+  const rows = [];
+  const flush = () => {
+    if (rows.length > 0) console.log(renderTable(['Level', 'Check'], rows));
+  };
   const report = (level, message) => {
-    console.log(`[${level}] ${message}`);
+    rows.push([`[${level}]`, message]);
   };
 
   if (!fs.existsSync(paths.harnessDir)) {
     report('FAIL', `harness directory missing: ${paths.harnessDir}`);
+    flush();
     return;
   }
   report('OK', `harness directory exists: ${paths.harnessDir}`);
@@ -1401,6 +1763,7 @@ function commandDoctor(gitRoot) {
 
   if (!fs.existsSync(paths.currentSessionFile)) {
     report('FAIL', 'current session file is missing');
+    flush();
     return;
   }
 
@@ -1408,6 +1771,7 @@ function commandDoctor(gitRoot) {
   const taskId = getSection(currentSession, 'Active Task ID') || 'None';
   if (taskId === 'None') {
     report('WARN', 'current session is not set (Active Task ID = None)');
+    flush();
     return;
   }
   report('OK', `current session: ${taskId}`);
@@ -1415,6 +1779,7 @@ function commandDoctor(gitRoot) {
   const sessionDir = getSessionDir(paths, taskId);
   if (!fs.existsSync(sessionDir)) {
     report('FAIL', `session directory missing: ${sessionDir}`);
+    flush();
     return;
   }
   report('OK', `session directory exists: ${sessionDir}`);
@@ -1429,7 +1794,7 @@ function commandDoctor(gitRoot) {
       missingSessionFiles += 1;
     }
   }
-  if (missingSessionFiles > 0) return;
+  if (missingSessionFiles > 0) { flush(); return; }
 
   const brief = readFile(path.join(sessionDir, 'brief.md'));
   const state = readFile(path.join(sessionDir, 'state.md'));
@@ -1528,6 +1893,7 @@ function commandDoctor(gitRoot) {
   } else {
     report('OK', 'codex workspace roots look consistent');
   }
+  flush();
 }
 
 function archiveOneSession(paths, taskId) {
@@ -1599,14 +1965,16 @@ function commandArchive(gitRoot, args) {
       return;
     }
     console.log(`${PRODUCT_NAME} archive --broken${dryRun ? ' (dry-run)' : ''}`);
+    const rows = [];
     for (const { id, repo } of items) {
       if (dryRun) {
-        console.log(`[would-archive] ${id} (repo missing: ${repo})`);
+        rows.push(['would-archive', id, `repo missing: ${repo}`]);
       } else {
         archiveOneSession(paths, id);
-        console.log(`[archived]     ${id}`);
+        rows.push(['archived', id, repo]);
       }
     }
+    console.log(renderTable(['Action', 'Task', 'Repo'], rows));
     console.log(`Summary: ${items.length} ${dryRun ? 'candidates' : 'archived'}`);
     return;
   }
@@ -1719,10 +2087,8 @@ function commandRepos(args) {
     if (repos.length === 0) {
       console.log('(no repos)');
     } else {
-      for (const r of repos) {
-        const exists = fs.existsSync(r) ? 'ok ' : 'MISSING';
-        console.log(`[${exists}] ${r}`);
-      }
+      const rows = repos.map((r) => [fs.existsSync(r) ? 'ok' : 'MISSING', r]);
+      console.log(renderTable(['Status', 'Repository'], rows));
     }
     return;
   }
@@ -1730,7 +2096,8 @@ function commandRepos(args) {
     if (!repoPath) throw new Error('Usage: atem repos <task-id> add <path>');
     const repos = session.addRepo(taskId, repoPath);
     console.log(`Repos for ${taskId}:`);
-    for (const r of repos) console.log(`- ${r}`);
+    const rows = repos.map((r) => [fs.existsSync(r) ? 'ok' : 'MISSING', r]);
+    console.log(renderTable(['Status', 'Repository'], rows));
     return;
   }
   throw new Error(usage);
@@ -1805,12 +2172,13 @@ function commandMigrateTasks(gitRoot, args) {
   let changed = 0;
   let brokenRepos = 0;
   let okCount = 0;
+  const rows = [];
 
   for (const taskId of taskIds) {
     const sessionDir = path.join(sessionsDir, taskId);
     const files = getSessionFileMap(sessionDir);
     if (!fs.existsSync(files.brief) || !fs.existsSync(files.state)) {
-      console.log(`[SKIP] ${taskId} — missing brief.md or state.md`);
+      rows.push(['[SKIP]', taskId, '', 'missing brief.md or state.md']);
       continue;
     }
     let brief = readFile(files.brief);
@@ -1886,14 +2254,15 @@ function commandMigrateTasks(gitRoot, args) {
         writeFile(files.state, state);
       }
       changed += 1;
-      console.log(`[FIX]  ${taskId} (${resolvedType}) — ${notes.join('; ')}${repoNote ? '  ⚠ ' + repoNote : ''}`);
+      rows.push(['[FIX]', taskId, resolvedType, `${notes.join('; ')}${repoNote ? '  ⚠ ' + repoNote : ''}`]);
     } else if (repoNote) {
-      console.log(`[WARN] ${taskId} (${resolvedType}) — ${repoNote}`);
+      rows.push(['[WARN]', taskId, resolvedType, repoNote]);
     } else {
       okCount += 1;
     }
   }
 
+  if (rows.length > 0) console.log(renderTable(['Level', 'Task', 'Type', 'Notes'], rows));
   console.log('');
   console.log(`Summary: ${changed} changed, ${brokenRepos} broken repos, ${okCount} ok${dryRun ? ' (dry-run — no writes)' : ''}`);
 }
@@ -2957,6 +3326,8 @@ Global session commands:
     Append timestamped task notes and optional decision/next/validation updates.
   instructions
     Print provider contract instructions for Claude/Codex/Cursor/etc.
+  goals
+    Read repo docs for goals and report goal/task drift.
 
 Project/worktree commands:
   project init
@@ -2980,6 +3351,7 @@ Common command forms:
   atem handoff <task-id> [--to <provider>] [--repo <repo-path>]
   atem snapshot <task-id> [--repo <repo-path>]
   atem note <task-id> "<note>" [--decision "<text>"] [--next "<text>"] [--validation "<text>"]
+  atem goals [--repo <repo-path>] [--files <a,b,c>] [--json]
   atem project init --repo <repo-path> [--convex]
   atem worktree start <task-id> --repo <repo-path> --branch <branch-name> [--path <worktree-path>]
   atem ready <task-id> --repo <repo-path> [--pr <url>]
@@ -3086,6 +3458,9 @@ function main(argv) {
         break;
       case 'snapshot-diff':
         commandSnapshotDiff(gitRoot, args);
+        break;
+      case 'goals':
+        commandGoals(gitRoot, args);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
