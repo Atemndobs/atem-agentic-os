@@ -7,6 +7,8 @@ const PRODUCT_NAME = 'ATEM';
 const PRODUCT_TAGLINE = 'Session handoff for AI coding agents, backed by Git.';
 const GLOBAL_STATE_DIR = path.join(os.homedir(), '.atem', 'harness');
 
+const synthetic = require('./synthetic.js');
+
 // Lazy require to avoid a require-cycle (src/url.js / src/handles.js have
 // no dependency on cli.js, but we keep the load lazy so test-only paths
 // remain cheap).
@@ -1212,12 +1214,18 @@ function getClaudeSessions() {
       const parsed = JSON.parse(readFile(file));
       if (!parsed || typeof parsed.pid !== 'number') continue;
       if (!isPidAlive(parsed.pid)) continue;
+      const sessionId = parsed.sessionId || '';
+      const cwd = parsed.cwd || '';
+      const syntheticId = sessionId
+        ? synthetic.deriveSyntheticId('claude-code', sessionId)
+        : (cwd ? synthetic.cwdFallbackId('claude-code', cwd) : '');
       sessions.push({
         pid: parsed.pid,
-        sessionId: parsed.sessionId || 'unknown',
-        cwd: parsed.cwd || 'unknown',
+        sessionId: sessionId || 'unknown',
+        cwd: cwd || 'unknown',
         entrypoint: parsed.entrypoint || 'unknown',
         startedAt: typeof parsed.startedAt === 'number' ? parsed.startedAt : 0,
+        syntheticId,
       });
     } catch {
       // Ignore malformed files.
@@ -1398,8 +1406,9 @@ function getOmpSessions(processLines = getProcessLines()) {
     if (!header) continue;
     const cwd = header.cwd || '';
     const matchingProc = procs.find((p) => p.cwd && cwd && path.resolve(p.cwd) === path.resolve(cwd));
+    const sessionId = header.id || path.basename(cand.file, '.jsonl');
     sessions.push({
-      sessionId: header.id || path.basename(cand.file, '.jsonl'),
+      sessionId,
       cwd,
       title: header.title || '',
       startedAt: header.timestamp ? Date.parse(header.timestamp) : 0,
@@ -1408,6 +1417,7 @@ function getOmpSessions(processLines = getProcessLines()) {
       encodedDir: cand.encodedDir,
       pid: matchingProc ? matchingProc.pid : null,
       live: !!matchingProc,
+      syntheticId: sessionId ? synthetic.deriveSyntheticId('omp', sessionId) : (cwd ? synthetic.cwdFallbackId('omp', cwd) : ''),
     });
   }
 
@@ -1425,6 +1435,7 @@ function getOmpSessions(processLines = getProcessLines()) {
       encodedDir: '',
       pid: p.pid,
       live: true,
+      syntheticId: p.cwd ? synthetic.cwdFallbackId('omp', p.cwd) : '',
     });
   }
 
@@ -1494,6 +1505,51 @@ function printExternalProviderActivity(repoFilter = '') {
     console.log('');
     console.log(renderTable(['Provider', 'Signal', 'Count', 'Path'], detailRows));
   }
+
+  // Ambient task identity (Phase A): show synthetic ids derived from
+  // provider-side session ids. These are addressable as atem://<id>/...
+  // even though no ATEM session dir exists yet.
+  const ambient = collectAmbientTasks(signals);
+  if (ambient.length > 0) {
+    console.log('');
+    console.log(`Detected sessions (${ambient.length}):`);
+    const rows = ambient.slice(0, 10).map((row) => [
+      synthetic.shortId(row.syntheticId, 6),
+      row.live ? `${ICONS.ok} live` : `${ICONS.none} recent`,
+      (row.title || '').slice(0, 40) || '—',
+      row.cwd || '—',
+    ]);
+    console.log(renderTable(['ATEM id', 'State', 'Title', 'cwd'], rows));
+    console.log(`Tip: \`atem resolve atem://${synthetic.shortId(ambient[0].syntheticId, 6)}.../<artifact>\` works without \`atem start\`.`);
+  }
+}
+
+function collectAmbientTasks(signals) {
+  const out = [];
+  for (const s of (signals.ompSessions || [])) {
+    if (!s.syntheticId) continue;
+    out.push({
+      syntheticId: s.syntheticId,
+      provider: 'omp',
+      title: s.title,
+      cwd: s.cwd,
+      live: !!s.live,
+      mtimeMs: s.mtimeMs || 0,
+    });
+  }
+  for (const s of (signals.claudeSessions || [])) {
+    if (!s.syntheticId) continue;
+    out.push({
+      syntheticId: s.syntheticId,
+      provider: 'claude-code',
+      title: '',
+      cwd: s.cwd,
+      live: true, // claude detector filters by isPidAlive already
+      mtimeMs: s.startedAt || 0,
+    });
+  }
+  out.sort((a, b) => (b.live - a.live) || (b.mtimeMs - a.mtimeMs));
+  return out;
 }
 
 function isPathWithinRepo(candidatePath, repoRoot) {
@@ -2032,7 +2088,8 @@ function commandHandoff(gitRoot, args) {
 
 function commandResolve(gitRoot, args) {
   const url = args[0];
-  if (!url) throw new Error('Usage: atem resolve <atem://...>');
+  if (!url) throw new Error('Usage: atem resolve <atem://...> [--raw]');
+  const raw = args.includes('--raw');
   const paths = resolveActivePaths(gitRoot);
   const { resolve: resolveUrl } = require('./url.js');
   const result = resolveUrl(url, paths);
@@ -2040,11 +2097,23 @@ function commandResolve(gitRoot, args) {
     throw new Error(`resolve failed [${result.code}]: ${result.message}`);
   }
   if (result.kind === 'file' || result.kind === 'directory') {
-    console.log(result.localPath);
+    if (raw) {
+      console.log(JSON.stringify({ kind: result.kind, localPath: result.localPath, mimeType: result.mimeType }, null, 2));
+    } else {
+      console.log(result.localPath);
+    }
     return;
   }
   if (result.kind === 'virtual') {
-    console.log(JSON.stringify(result.payload, null, 2));
+    if (raw) {
+      console.log(JSON.stringify({ kind: 'virtual', mimeType: result.mimeType, payload: result.payload }, null, 2));
+      return;
+    }
+    if (result.mimeType === 'text/markdown' && typeof result.payload === 'string') {
+      console.log(result.payload);
+    } else {
+      console.log(JSON.stringify(result.payload, null, 2));
+    }
     return;
   }
   throw new Error(`resolve returned unexpected kind: ${result.kind}`);

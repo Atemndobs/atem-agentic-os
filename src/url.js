@@ -8,6 +8,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const synthetic = require('./synthetic.js');
+
 const ARTIFACT_ALIASES = {
   brief: 'brief.md',
   state: 'state.md',
@@ -139,6 +141,33 @@ function resolveArtifact(sessionDir, tail) {
     : err('missing-file', `no ${fname} at ${full}`);
 }
 
+// Synthetic resolution: when the target is a `<provider>:<id>` synthetic
+// task that has not been materialized, route to the provider adapter's
+// `resolveSynthetic(syntheticId, artifact)` for a virtual payload.
+// Materialization happens in Phase B; here we stay read-only.
+function resolveSyntheticVirtual(syntheticId, tail) {
+  // Lazy-require the adapters registry to avoid load-order cycles.
+  let registry;
+  try { registry = require('./adapters/index.js'); }
+  catch { return err('unknown-task', `synthetic resolve failed: no adapters`); }
+  const parsed = synthetic.parseSyntheticId(syntheticId);
+  if (!parsed) return err('unknown-task', `not a known synthetic id: ${syntheticId}`);
+  const adapter = registry.adapters[parsed.provider];
+  if (!adapter || typeof adapter.resolveSynthetic !== 'function') {
+    return err('unknown-task', `provider ${parsed.provider} has no resolveSynthetic`);
+  }
+  const artifact = tail.length === 0 ? 'overview' : tail.join('/');
+  try {
+    const result = adapter.resolveSynthetic(syntheticId, artifact);
+    if (!result || typeof result.content !== 'string') {
+      return err('missing-file', `synthetic ${syntheticId}/${artifact}: empty result`);
+    }
+    return virtual(result.content, result.mimeType || 'text/markdown');
+  } catch (e) {
+    return err('missing-file', `synthetic resolve threw: ${e.message}`);
+  }
+}
+
 // Public API. paths = result of resolveActivePaths(gitRoot).
 function resolve(url, paths) {
   if (!paths || !paths.harnessDir) return err('harness-not-initialized', 'no harness paths');
@@ -155,6 +184,18 @@ function resolve(url, paths) {
     if (!taskId) return err('no-active-session', 'no active task in current-session.md');
   } else {
     taskId = parsed.target;
+  }
+
+  // Synthetic task ids (`<provider>:<id>`) take precedence over the path
+  // safety check below — colons are allowed in this form.
+  if (synthetic.isSyntheticId(taskId)) {
+    const sessionDir = path.join(paths.harnessDir, 'sessions', taskId);
+    if (fs.existsSync(sessionDir)) {
+      // Already materialized — same code path as any other task.
+      return resolveArtifact(sessionDir, parsed.tail);
+    }
+    // Unmaterialized: route to provider adapter for a virtual payload.
+    return resolveSyntheticVirtual(taskId, parsed.tail);
   }
 
   // Reject obviously bogus task ids (path traversal, separators).

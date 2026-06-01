@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const session = require('./session.js');
 const omp = require('./omp.js');
 const url = require('../url.js');
+const synthetic = require('../synthetic.js');
 
 // URL-based read/write over atem:// paths. Lets any provider participate
 // in ATEM through one path convention instead of N adapter-specific
@@ -90,10 +91,29 @@ function writeUrl(atemUrl, content, paths, opts = {}) {
   return { localPath, hash: hashContent(content) };
 }
 
+function defaultResolveSynthetic(providerName) {
+  return (syntheticId, artifact) => ({
+    content: [
+      `<!-- atem synthetic view of ${syntheticId} -->`,
+      `<!-- read-only stub; ${providerName} adapter has no rich distiller yet -->`,
+      '',
+      `# ${artifact} — synthetic (${providerName})`,
+      '',
+      `This is a placeholder. The ${providerName} adapter does not yet`,
+      `read its provider-side session file. Promote with`,
+      `\`atem adopt ${syntheticId} --name <alias>\` to materialize an`,
+      `editable ATEM session.`,
+      '',
+    ].join('\n'),
+    mimeType: 'text/markdown',
+  });
+}
+
 function makeProviderAdapter(providerName, overrides = {}) {
   return {
     name: providerName,
     read: session.readSession,
+    resolveSynthetic: defaultResolveSynthetic(providerName),
     // url-based read/write — opt-in second signature. Callers pass a
     // paths bundle so the adapter stays stateless.
     readUrl(atemUrl, paths) { return readUrl(atemUrl, paths); },
@@ -119,6 +139,48 @@ function makeProviderAdapter(providerName, overrides = {}) {
   };
 }
 
+// --- Phase A: synthetic id rendering -------------------------------------
+
+function renderOmpSyntheticArtifact(distilled, artifact, syntheticId) {
+  const banner = [
+    `<!-- atem synthetic view of ${syntheticId} -->`,
+    `<!-- read-only; promote with \`atem adopt ${syntheticId} --name <alias>\` to materialize -->`,
+    '',
+  ].join('\n');
+  const meta = [
+    `- Provider: omp`,
+    `- Session: ${distilled.sessionId}`,
+    `- cwd: ${distilled.cwd || '(unknown)'}`,
+    distilled.title ? `- Title: ${distilled.title}` : '',
+    distilled.model ? `- Model: ${distilled.model}` : '',
+    distilled.mode && distilled.mode !== 'none' ? `- Mode: ${distilled.mode}` : '',
+    distilled.pausedMidTool ? `- ⚠ Paused mid tool-call` : '',
+  ].filter(Boolean).join('\n');
+
+  switch (artifact) {
+    case 'brief':
+      return banner + `# Brief — synthetic\n\n${meta}\n\n## First task\n\n${distilled.firstTask || '(no captured task text)'}\n`;
+    case 'state':
+    case 'overview':
+      return banner + `# State — synthetic\n\n${meta}\n\n## Summary\n\n${distilled.summary || '(no summary distilled)'}\n\n## Last user message\n\n${distilled.lastUserMessage || '(none)'}\n\n## Last assistant text\n\n${distilled.lastAssistantText || '(none)'}\n`;
+    case 'handoff':
+      return banner + `# Handoff — synthetic\n\n${meta}\n\n## Where omp left off\n\n${distilled.summary || distilled.lastAssistantText || '(no progress captured)'}\n\n## Next provider should\n\nRead the brief and state above, then continue from "Where omp left off".\n\n${distilled.pausedMidTool ? '⚠ omp may be paused mid tool-call — verify before continuing.\n' : ''}`;
+    case 'next':
+      return banner + `# Next — synthetic\n\n(Synthetic task. Promote with \`atem adopt ${syntheticId}\` to materialize and edit.)\n`;
+    case 'decisions':
+      return banner + `# Decisions — synthetic\n\n` +
+        (distilled.labels && distilled.labels.length
+          ? distilled.labels.map((l) => `- [${l.timestamp || ''}] ${l.label}`).join('\n') + '\n'
+          : '(no labels captured)\n');
+    case 'validation':
+      return banner + `# Validation — synthetic\n\n(synthetic; no validation captured)\n`;
+    case 'log':
+      return banner + `# Log — synthetic\n\nomp session started ${distilled.startedAt || '(unknown)'}.\n`;
+    default:
+      throw new Error(`unknown synthetic artifact for omp: ${artifact}`);
+  }
+}
+
 // omp adapter: same ATEM-side API as the others, but also exposes
 // read-only helpers over omp's on-disk session files (T1.3).
 // Distillation maps omp state into ATEM session files (T1.6).
@@ -132,6 +194,24 @@ const ompAdapter = makeProviderAdapter('omp', {
     readHeader: omp.readHeader,
     distill: omp.distillSessionSync,
     distillAsync: omp.distillSession,
+  },
+  // Phase A: render a synthetic markdown view of an omp session without
+  // touching the ATEM session dir. The URL resolver calls this when
+  // asked for atem://omp:<id>/<artifact> and the dir doesn't exist.
+  resolveSynthetic(syntheticId, artifact) {
+    const parsed = synthetic.parseSyntheticId(syntheticId);
+    if (!parsed || parsed.provider !== 'omp') {
+      throw new Error(`not an omp synthetic id: ${syntheticId}`);
+    }
+    let file = omp.findSessionFileById(parsed.providerSessionId);
+    if (!file) throw new Error(`omp session not found on disk: ${parsed.providerSessionId}`);
+    const distilled = omp.distillSessionSync(file);
+    if (!distilled) throw new Error(`failed to distill ${file}`);
+    return {
+      content: renderOmpSyntheticArtifact(distilled, artifact, syntheticId),
+      mimeType: 'text/markdown',
+      metadata: { sessionFile: file, sessionId: distilled.sessionId },
+    };
   },
   // Pull omp's current state into ATEM's session files. Read-only on
   // omp's side. taskOpts may specify { cwd } or { sessionFile } or
