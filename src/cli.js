@@ -1642,18 +1642,18 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
   // Details table (only providers with signals)
   const detailRows = [];
   for (const s of claudeSessions.slice(0, 10)) {
-    detailRows.push(['claude-code', `pid ${s.pid}`, s.entrypoint, s.cwd]);
+    detailRows.push(['claude-code', `pid ${s.pid}`, s.entrypoint, shortenPath(s.cwd, 50)]);
   }
   if (codexDesktopServers.length > 0) detailRows.push(['codex', 'app servers', String(codexDesktopServers.length), '']);
   if (codexExtensionServers.length > 0) detailRows.push(['codex', 'extension servers', String(codexExtensionServers.length), '']);
-  for (const root of codexRoots) detailRows.push(['codex', 'workspace root', '', root]);
+  for (const root of codexRoots) detailRows.push(['codex', 'workspace root', '', shortenPath(root, 50)]);
   for (const p of cursorProcesses.slice(0, 5)) detailRows.push(['cursor', `pid ${p.pid}`, '', '']);
   for (const p of opencodeProcesses.slice(0, 5)) detailRows.push(['opencode', `pid ${p.pid}`, '', '']);
   for (const p of openrouterProcesses.slice(0, 5)) detailRows.push(['openrouter', `pid ${p.pid}`, '', '']);
   for (const p of (antigravityProcesses || []).slice(0, 5)) detailRows.push(['antigravity', `pid ${p.pid}`, '', '']);
   for (const s of (ompSessions || []).slice(0, 10)) {
     const label = s.live ? (s.pid ? `pid ${s.pid} live` : 'live') : 'recent';
-    detailRows.push(['omp', label, s.title || s.sessionId, s.cwd]);
+    detailRows.push(['omp', label, ellipsizeRight(s.title || s.sessionId, 40), shortenPath(s.cwd, 50)]);
   }
   if (detailRows.length > 0) {
     console.log('');
@@ -1677,9 +1677,9 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
       row.live
         ? `${ICONS.ok} live`
         : `${ICONS.none} ${synthetic.formatRelativeAge(row.mtimeMs) || 'recent'}`,
-      (row.title || '').slice(0, 40) || '—',
-      detectWorktreeName(row.cwd) || '—',
-      row.cwd || '—',
+      ellipsizeRight(row.title, 40) || '—',
+      ellipsizeRight(detectWorktreeName(row.cwd), 28) || '—',
+      shortenPath(row.cwd, 50) || '—',
     ]);
     console.log(renderTable(['ATEM id', 'State', 'Title', 'Worktree', 'cwd'], rows));
     const footnotes = [];
@@ -1758,6 +1758,32 @@ function collectAmbientTasks(signals) {
   }
   out.sort((a, b) => (b.live - a.live) || (b.mtimeMs - a.mtimeMs));
   return out;
+}
+
+// Shorten a path for table display: replace $HOME with `~`, then if
+// still over `maxLen`, keep head + tail with a middle ellipsis. The
+// tail is preferred ≥ head so the trailing segment (most distinctive
+// in a path) stays visible.
+function shortenPath(p, maxLen = 50) {
+  if (!p || p === 'unknown') return p || '';
+  const home = os.homedir();
+  let s = p;
+  if (home && (s === home || s.startsWith(home + path.sep))) {
+    s = '~' + s.slice(home.length);
+  }
+  if (s.length <= maxLen) return s;
+  // Reserve 1 char for `…`. Bias the tail.
+  const budget = maxLen - 1;
+  const tail = Math.ceil(budget * 0.65);
+  const head = budget - tail;
+  return s.slice(0, head) + '…' + s.slice(s.length - tail);
+}
+
+// Truncate any single-line string to `maxLen` with a trailing ellipsis.
+function ellipsizeRight(s, maxLen) {
+  if (!s) return '';
+  const flat = String(s).replace(/\s+/g, ' ').trim();
+  return flat.length <= maxLen ? flat : flat.slice(0, maxLen - 1) + '…';
 }
 
 // Detect whether a cwd is a git worktree checkout. A worktree has `.git`
