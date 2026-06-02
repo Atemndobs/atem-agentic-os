@@ -226,7 +226,16 @@ function makeCodexLauncher({
       let error;
       try {
         thread = await withCodexBridge(bin, async (client) => {
-          await client.request('initialize', { clientInfo: { name: 'atem', version: '0.1.0' } });
+          // clientInfo.name → thread.originator. Codex Desktop hides
+          // threads whose originator isn't 'Codex Desktop' from its
+          // project sidebar. We identify the actual tool via `title`
+          // so the Desktop's analytics + audit still see ATEM, but
+          // the sidebar filter passes. Empirically verified by diffing
+          // a visible thread vs. one of ours: the only differing
+          // header field was `originator`.
+          await client.request('initialize', {
+            clientInfo: { name: 'Codex Desktop', title: 'atem', version: '0.1.0' },
+          });
           const startResult = await client.request('thread/start', {
             cwd: input.targetRepo,
             serviceName: sidebarName,
