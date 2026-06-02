@@ -2129,6 +2129,10 @@ function printRepoHarnessStatus(gitRoot) {
   console.log(renderTable(['Key', 'Value'], ctxRows));
 }
 
+// F.1: project context auto-discovery. Lives in its own module so
+// the buildHandoffPrompt function stays focused on prompt assembly.
+const projectContextModule = require('./context.js');
+
 function buildHandoffPrompt(taskId, targetProvider = null, paths = null, targetRepo = null, taskType = DEFAULT_TASK_TYPE) {
   const root = paths ? paths.harnessDir : '.harness';
   const filePath = (relativePath) => {
@@ -2203,6 +2207,8 @@ function buildHandoffPrompt(taskId, targetProvider = null, paths = null, targetR
     ...taskRule,
     '## Work Rule',
     'Continue the task, preserve existing decisions, and make the smallest useful progress.',
+    // F.1: include the project's bigger plan when we can find one.
+    ...buildProjectContextLines(targetRepo),
     '## Stop Rule',
     'Before stopping, update all relevant session files:',
     '- handoff.md',
@@ -2213,6 +2219,20 @@ function buildHandoffPrompt(taskId, targetProvider = null, paths = null, targetR
     '- log.md',
     'Never end the session without updating `handoff.md`.',
   ].join('\n');
+}
+
+// F.1: project context section. Returns the lines to splice into the
+// handoff prompt — empty array when nothing was discovered (so we
+// don't add noise to projects without these docs).
+function buildProjectContextLines(targetRepo) {
+  if (!targetRepo) return [];
+  try {
+    const context = projectContextModule.discoverProjectContext(targetRepo);
+    const block = projectContextModule.renderProjectContextSection(context);
+    return block ? block.split('\n') : [];
+  } catch {
+    return [];
+  }
 }
 
 // AGENTS.md is the rule format omp + codex both honor in the repo root.
