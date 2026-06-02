@@ -2404,6 +2404,7 @@ function commandHandoff(gitRoot, args) {
 
   const launchers = require('./launchers/index.js');
   const registry = launchers.defaultRegistry();
+  const noFocus = args.includes('--no-focus');
   const input = {
     syntheticId: taskId,
     fromProvider: provider ? (readSessionFrontmatterProvider(files) || 'unknown') : 'unknown',
@@ -2414,6 +2415,7 @@ function commandHandoff(gitRoot, args) {
     paths,
     agentsMdPath,
     fromCli: true,
+    focus: !noFocus,
   };
 
   (async () => {

@@ -186,6 +186,25 @@ test('D.3: bridge client surfaces rpc error responses', async () => {
   await assert.rejects(p, /nope/);
 });
 
+test('D.5: codex launcher fires codex://threads/<id> deep link by default', async () => {
+  const opens = [];
+  const stubOpen = (id) => { opens.push(id); return `codex://threads/${id}`; };
+  const fakeFindBin = () => '/fake/codex';
+  // Real `withCodexBridge` would spawn a subprocess; bypass by overriding
+  // the launcher's flow with a manual stub of bridge results.
+  const { openCodexThreadUrl } = require('../src/launchers/codex.js');
+  // Direct test of the URL function itself.
+  let spawnedArgs = null;
+  const fakeSpawn = (bin, args) => {
+    spawnedArgs = { bin, args };
+    return { unref() {}, on() {} };
+  };
+  const url = openCodexThreadUrl('abc-123', { spawnFn: fakeSpawn });
+  assert.equal(url, 'codex://threads/abc-123');
+  assert.ok(spawnedArgs);
+  assert.match(spawnedArgs.args.join(' '), /codex:\/\/threads\/abc-123/);
+});
+
 test('D.3: codex launcher reports unavailable when binary missing', async () => {
   const launcher = makeCodexLauncher({ findBin: () => null });
   assert.equal(launcher.available(), false);

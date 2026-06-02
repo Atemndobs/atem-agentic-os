@@ -13,6 +13,7 @@
 // Bridge surface documented in docs/research/codex-bridge.md.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
@@ -119,7 +120,31 @@ async function withCodexBridge(bin, fn, { timeoutMs = 20000 } = {}) {
 
 // --- The launcher itself ----------------------------------------------------
 
-function makeCodexLauncher({ findBin = findCodexBinary } = {}) {
+// Fire the codex:// deep link so the running Desktop app jumps to the
+// new thread (and re-indexes that project's threads). URL scheme
+// discovered empirically from /Applications/Codex.app/Contents/Resources/app.asar
+// (search for `codex://threads/`).
+function openCodexThreadUrl(threadId, { spawnFn = spawn } = {}) {
+  if (!threadId) return;
+  const url = `codex://threads/${threadId}`;
+  let bin = null, args = null;
+  if (process.platform === 'darwin') {
+    bin = 'open'; args = [url];
+  } else if (process.platform === 'win32') {
+    bin = 'cmd'; args = ['/c', 'start', '""', url];
+  } else {
+    bin = 'xdg-open'; args = [url];
+  }
+  try {
+    const child = spawnFn(bin, args, { stdio: 'ignore', detached: true });
+    try { child.unref(); } catch { /* harmless */ }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function makeCodexLauncher({ findBin = findCodexBinary, openUrlFn = openCodexThreadUrl } = {}) {
   return {
     name: 'codex',
 
@@ -196,13 +221,24 @@ function makeCodexLauncher({ findBin = findCodexBinary } = {}) {
       if (error) {
         return { kind: 'unavailable', reason: `codex bridge failed: ${error.message}` };
       }
+
+      // D.5: kick the running Codex Desktop to display the new thread.
+      // Opt out with --no-focus (handled upstream by the caller passing
+      // `focus: false`). Without this, Desktop's running app-server
+      // doesn't poll session_index.jsonl immediately and the user
+      // wouldn't see the thread until restart.
+      let openedUrl = null;
+      if (input.focus !== false) {
+        openedUrl = openUrlFn(thread.id);
+      }
+      const focusBlurb = openedUrl ? ` Codex Desktop opened at the new thread.` : '';
       return {
         kind: 'launched',
-        summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`) → open Codex; the entry is in the sidebar.`,
-        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName },
+        summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`).${focusBlurb}`,
+        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl },
       };
     },
   };
 }
 
-module.exports = { makeCodexLauncher, findCodexBinary, withCodexBridge, makeBridgeClient };
+module.exports = { makeCodexLauncher, findCodexBinary, withCodexBridge, makeBridgeClient, openCodexThreadUrl };
