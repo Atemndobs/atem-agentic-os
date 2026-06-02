@@ -28,6 +28,7 @@ const PROVIDERS = new Set([
   'opencode',
   'openrouter',
   'omp',
+  'antigravity',
   'local-model',
   'manual',
 ]);
@@ -1599,6 +1600,7 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
     cursorProcesses,
     opencodeProcesses,
     openrouterProcesses,
+    antigravityProcesses,
     ompSessions,
   } = signals;
   const codexDesktopServers = codexServers.filter((entry) => entry.command.includes('/Applications/Codex.app'));
@@ -1609,6 +1611,7 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
     cursorProcesses.length +
     opencodeProcesses.length +
     openrouterProcesses.length +
+    (antigravityProcesses ? antigravityProcesses.length : 0) +
     (ompSessions ? ompSessions.length : 0);
 
   console.log('');
@@ -1631,6 +1634,7 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
     [`${ICONS.provider} cursor`, fmt(cursorProcesses.length, 'process(es)')],
     [`${ICONS.provider} opencode`, fmt(opencodeProcesses.length, 'process(es)')],
     [`${ICONS.provider} openrouter`, fmt(openrouterProcesses.length, 'process(es)')],
+    [`${ICONS.provider} antigravity`, fmt((antigravityProcesses || []).length, 'process(es)')],
     [`${ICONS.provider} omp`, fmt((ompSessions || []).length, 'session(s)')],
   ];
   console.log(renderTable(['Provider', 'Status'], summaryRows));
@@ -1646,6 +1650,7 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
   for (const p of cursorProcesses.slice(0, 5)) detailRows.push(['cursor', `pid ${p.pid}`, '', '']);
   for (const p of opencodeProcesses.slice(0, 5)) detailRows.push(['opencode', `pid ${p.pid}`, '', '']);
   for (const p of openrouterProcesses.slice(0, 5)) detailRows.push(['openrouter', `pid ${p.pid}`, '', '']);
+  for (const p of (antigravityProcesses || []).slice(0, 5)) detailRows.push(['antigravity', `pid ${p.pid}`, '', '']);
   for (const s of (ompSessions || []).slice(0, 10)) {
     const label = s.live ? (s.pid ? `pid ${s.pid} live` : 'live') : 'recent';
     detailRows.push(['omp', label, s.title || s.sessionId, s.cwd]);
@@ -1819,6 +1824,9 @@ function filterSignalsByRepo(signals, repoRoot) {
   const filteredOpenRouter = signals.openrouterProcesses.filter((entry) =>
     entry.command.includes(repoRoot)
   );
+  const filteredAntigravity = (signals.antigravityProcesses || []).filter((entry) =>
+    entry.command.includes(repoRoot)
+  );
 
   const filteredOmp = (signals.ompSessions || []).filter((session) =>
     isPathWithinRepo(session.cwd, repoRoot)
@@ -1832,6 +1840,7 @@ function filterSignalsByRepo(signals, repoRoot) {
     cursorProcesses: filteredCursor,
     opencodeProcesses: filteredOpenCode,
     openrouterProcesses: filteredOpenRouter,
+    antigravityProcesses: filteredAntigravity,
     ompSessions: filteredOmp,
   };
 }
@@ -1864,6 +1873,12 @@ function collectExternalProviderSignals(repoFilter = '') {
     processLines.filter((entry) => /openrouter/i.test(entry.command)),
     (entry) => [entry.pid, entry.command].join('|')
   );
+  // Match Antigravity.app processes; exclude unrelated paths (e.g. the
+  // pencil MCP helper that lives under ~/.pencil/mcp/antigravity/).
+  const antigravityProcesses = uniqueBy(
+    processLines.filter((entry) => /\/Antigravity\.app\//i.test(entry.command)),
+    (entry) => [entry.pid, entry.command].join('|')
+  );
   const ompSessions = uniqueBy(getOmpSessions(processLines), (s) =>
     [s.pid || '', s.sessionFile, s.cwd].join('|')
   );
@@ -1876,6 +1891,7 @@ function collectExternalProviderSignals(repoFilter = '') {
     cursorProcesses,
     opencodeProcesses,
     openrouterProcesses,
+    antigravityProcesses,
     ompSessions,
   };
 
@@ -1927,6 +1943,12 @@ function formatActiveProvidersSection(signals) {
   if (signals.openrouterProcesses.length > 0) {
     lines.push('### openrouter');
     lines.push(`- process count: ${signals.openrouterProcesses.length}`);
+    lines.push('');
+  }
+
+  if ((signals.antigravityProcesses || []).length > 0) {
+    lines.push('### antigravity');
+    lines.push(`- process count: ${signals.antigravityProcesses.length}`);
     lines.push('');
   }
 
