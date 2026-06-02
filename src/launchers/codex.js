@@ -41,6 +41,7 @@ function findCodexBinary() {
 function makeBridgeClient(child) {
   let nextId = 1;
   const pending = new Map();   // id -> { resolve, reject }
+  const notifWaiters = [];     // [{ matcher, resolve }]
   let buffer = '';
   let closed = false;
 
@@ -59,8 +60,15 @@ function makeBridgeClient(child) {
         pending.delete(msg.id);
         if (msg.error) handlers.reject(new Error(msg.error.message || 'rpc error'));
         else handlers.resolve(msg.result);
+      } else if (msg && msg.method && notifWaiters.length > 0) {
+        // Fire any matching notification waiters and drop them.
+        for (let i = notifWaiters.length - 1; i >= 0; i--) {
+          if (notifWaiters[i].matcher(msg)) {
+            const w = notifWaiters.splice(i, 1)[0];
+            w.resolve(msg);
+          }
+        }
       }
-      // Notifications (no id) are ignored for now.
     }
   });
   child.on('exit', () => {
@@ -89,7 +97,20 @@ function makeBridgeClient(child) {
     try { child.stdin.end(); } catch { /* harmless */ }
   }
 
-  return { request, close };
+  // Wait for a server notification matching the predicate, with a
+  // timeout. Used to confirm the user message has been persisted
+  // before we tear the bridge down — otherwise the threads row's
+  // first_user_message stays empty and Codex Desktop hides it.
+  function waitForNotification(matcher, { timeoutMs = 4000 } = {}) {
+    return new Promise((resolve) => {
+      let done = false;
+      const onResolve = (msg) => { if (done) return; done = true; resolve(msg); };
+      notifWaiters.push({ matcher, resolve: onResolve });
+      setTimeout(() => onResolve(null), timeoutMs);
+    });
+  }
+
+  return { request, close, waitForNotification };
 }
 
 // One-shot helper: spawn the app-server, run a sequence of calls, close.
@@ -119,6 +140,35 @@ async function withCodexBridge(bin, fn, { timeoutMs = 20000 } = {}) {
 }
 
 // --- The launcher itself ----------------------------------------------------
+
+// Populate the `first_user_message` + `preview` columns on the threads
+// row so Codex Desktop's sidebar shows the thread. Discovered by
+// diffing visible vs invisible rows: the sidebar filter is "thread has
+// a first user message". Without this update, the row exists but the
+// project sidebar hides it. Codex Desktop will overwrite these
+// columns naturally when the user opens the thread and interacts with
+// the model — our write is just a placeholder so the sidebar renders.
+//
+// Best-effort. Skips silently if sqlite3 isn't available or the schema
+// has changed.
+function setFirstUserMessage(threadId, message, { homeDir } = {}) {
+  if (!threadId || !message) return false;
+  const home = homeDir || os.homedir();
+  const dbFile = path.join(home, '.codex', 'state_5.sqlite');
+  if (!fs.existsSync(dbFile)) return false;
+  const escaped = String(message).replace(/'/g, "''").slice(0, 600);
+  const sql = `UPDATE threads
+                 SET first_user_message = '${escaped}',
+                     preview = '${escaped}'
+                 WHERE id = '${threadId}'
+                   AND (first_user_message IS NULL OR first_user_message = '');`;
+  try {
+    execFileSync('sqlite3', [dbFile, sql], { stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Register the new thread in Codex Desktop's sidebar cache so it
 // appears in the project's chat list. Discovered empirically:
@@ -183,6 +233,7 @@ function makeCodexLauncher({
   findBin = findCodexBinary,
   openUrlFn = openCodexThreadUrl,
   registerInDesktopFn = registerThreadInDesktopCache,
+  setFirstMessageFn = setFirstUserMessage,
 } = {}) {
   return {
     name: 'codex',
@@ -257,7 +308,9 @@ function makeCodexLauncher({
           try {
             await client.request('thread/name/set', { threadId: id, name: sidebarName });
           } catch { /* not fatal */ }
-          // Send the first turn as a text input.
+          // Send the first turn so Codex records that the thread has
+          // had input. The actual model response doesn't matter to us —
+          // the sidebar visibility comes from D.7's SQLite write below.
           await client.request('turn/start', {
             threadId: id,
             input: [{ type: 'text', text: firstTurn }],
@@ -280,6 +333,16 @@ function makeCodexLauncher({
       // doesn't show up in the project's chat list.
       const cached = registerInDesktopFn(thread.id, input.targetRepo);
 
+      // D.7: populate first_user_message in the threads SQLite row so
+      // the project sidebar will actually render this thread. Codex
+      // hides empty threads. The model never actually responds to
+      // our seed turn (we exit before that), so the column would
+      // otherwise stay empty.
+      const sidebarRow = setFirstMessageFn(
+        thread.id,
+        `Pick up the ATEM handoff. Read \`atem://current/handoff\` first.`
+      );
+
       // D.5: kick the running Codex Desktop to display the new thread.
       // Opt out with --no-focus (handled upstream by the caller passing
       // `focus: false`). Without this, Desktop's running app-server
@@ -290,11 +353,11 @@ function makeCodexLauncher({
         openedUrl = openUrlFn(thread.id);
       }
       const focusBlurb = openedUrl ? ` Codex Desktop opened at the new thread.` : '';
-      const cacheBlurb = cached ? '' : ' (sidebar registration skipped — Codex may need a restart to display this thread).';
+      const cacheBlurb = (cached || sidebarRow) ? '' : ' (sidebar registration skipped — Codex may need a restart to display this thread).';
       return {
         kind: 'launched',
         summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`).${focusBlurb}${cacheBlurb}`,
-        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl, sidebarRegistered: cached },
+        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl, sidebarRegistered: cached, sqliteRow: sidebarRow },
       };
     },
   };
@@ -307,4 +370,5 @@ module.exports = {
   makeBridgeClient,
   openCodexThreadUrl,
   registerThreadInDesktopCache,
+  setFirstUserMessage,
 };
