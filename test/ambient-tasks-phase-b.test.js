@@ -73,7 +73,7 @@ test('handoff <synthetic> materializes the task dir on first use', () => {
   const sessionsDir = path.join(home, '.atem', 'harness', 'sessions');
   assert.equal(fs.existsSync(path.join(sessionsDir, syntheticId)), false, 'precondition: not materialized');
 
-  const out = runAtem(['handoff', syntheticId, '--to', 'codex', '--repo', repo], env);
+  const out = runAtem(['handoff', syntheticId, '--to', 'codex', '--repo', repo, '--print'], env);
   assert.match(out, /# ATEM Session Handoff/);
   const dir = path.join(sessionsDir, syntheticId);
   assert.ok(fs.existsSync(dir), 'synthetic id should now be materialized');
@@ -136,7 +136,7 @@ test('task type inference: omp mode=plan → investigation', () => {
 test('alias → synthetic round-trip via handoff', () => {
   const { home, repo, env, syntheticId } = setupAmbient();
   runAtem(['adopt', syntheticId, '--name', 'flake'], env);
-  const out = runAtem(['handoff', 'flake', '--to', 'codex', '--repo', repo], env);
+  const out = runAtem(['handoff', 'flake', '--to', 'codex', '--repo', repo, '--print'], env);
   assert.match(out, /# ATEM Session Handoff/);
   assert.match(out, /Task[^\n]*\n[^\n]*omp:sess-B1/);
 });

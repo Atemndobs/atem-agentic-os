@@ -2383,14 +2383,67 @@ function commandHandoff(gitRoot, args) {
 
   // Drop AGENTS.md at the target repo when handing off TO a provider that
   // honors it (omp + codex). Idempotent — only replaces our marked block.
+  let agentsMdPath = null;
   if (provider && (provider === 'omp' || provider === 'codex') && resolvedTargetRepo) {
-    const dest = writeAgentsMd(resolvedTargetRepo, taskId, paths, taskType, provider);
-    if (dest) {
-      console.error(`# ATEM: wrote handoff block to ${dest}`);
+    agentsMdPath = writeAgentsMd(resolvedTargetRepo, taskId, paths, taskType, provider);
+    if (agentsMdPath) {
+      console.error(`# ATEM: wrote handoff block to ${agentsMdPath}`);
     }
   }
 
-  console.log(buildHandoffPrompt(taskId, provider, paths, resolvedTargetRepo, taskType));
+  const handoffPrompt = buildHandoffPrompt(taskId, provider, paths, resolvedTargetRepo, taskType);
+
+  // D.1: dispatch through the launcher table. --print forces fallback
+  // to printing the prompt (today's behavior). Without a provider, also
+  // print — there's no destination to launch.
+  const forcePrint = args.includes('--print');
+  if (!provider || forcePrint) {
+    console.log(handoffPrompt);
+    return;
+  }
+
+  const launchers = require('./launchers/index.js');
+  const registry = launchers.defaultRegistry();
+  const input = {
+    syntheticId: taskId,
+    fromProvider: provider ? (readSessionFrontmatterProvider(files) || 'unknown') : 'unknown',
+    toProvider: provider,
+    targetRepo: resolvedTargetRepo,
+    taskType,
+    handoffPrompt,
+    paths,
+    agentsMdPath,
+    fromCli: true,
+  };
+
+  (async () => {
+    const result = await launchers.dispatch(registry, input, { forcePrint });
+    if (result.kind === 'launched') {
+      console.log(`✓ ${result.summary}`);
+      if (agentsMdPath) {
+        console.log(`  AGENTS.md updated in ${path.dirname(agentsMdPath)} — provider will read it on session start.`);
+      }
+      console.log('  Run `atem handoff <task> --to <provider> --print` to get the raw prompt instead.');
+    } else if (result.kind === 'printed') {
+      if (result.summary) console.error(`# ATEM: ${result.summary}`);
+    }
+  })().catch((err) => {
+    console.error(`# ATEM handoff failed: ${err.message}`);
+    console.log(handoffPrompt);
+    process.exitCode = 1;
+  });
+}
+
+// Small helper used by the launcher dispatch above to surface "who is
+// the current provider" from the active state.md.
+function readSessionFrontmatterProvider(files) {
+  try {
+    const state = fs.readFileSync(files.state, 'utf8');
+    const fm = parseFrontmatter(state).data;
+    return fm.provider || '';
+  } catch {
+    return '';
+  }
 }
 
 function commandResolve(gitRoot, args) {

@@ -148,7 +148,7 @@ test('handoff claude-code:<id> --to codex materializes via the claude-code disti
   const env = envFor(home);
   runAtem(['init'], env);
   const synthId = `claude-code:${sessionId}`;
-  const out = runAtem(['handoff', synthId, '--to', 'codex', '--repo', repo], env);
+  const out = runAtem(['handoff', synthId, '--to', 'codex', '--repo', repo, '--print'], env);
   assert.match(out, /# ATEM Session Handoff/);
 
   const dir = path.join(home, '.atem', 'harness', 'sessions', synthId);

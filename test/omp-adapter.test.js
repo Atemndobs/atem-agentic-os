@@ -196,7 +196,7 @@ test('handoff --from omp ingests before generating prompt', () => {
       message: { role: 'assistant', content: [{ type: 'text', text: 'Patched src/auth.ts retry cap from 3 to 5.' }] } },
   ]);
 
-  const out = runAtem(['handoff', taskId, '--to', 'codex', '--from', 'omp', '--omp-cwd', repo, '--repo', repo], env);
+  const out = runAtem(['handoff', taskId, '--to', 'codex', '--from', 'omp', '--omp-cwd', repo, '--repo', repo, '--print'], env);
   // The state should now carry the ingested summary AND the handoff prompt emerge.
   const state = fs.readFileSync(path.join(sessionsDir, taskId, 'state.md'), 'utf8');
   assert.ok(state.includes('Patched src/auth.ts retry cap'), 'ingest happened before handoff');

@@ -104,7 +104,9 @@ test('handoff can route to provider with --to', () => {
   const repoDir = setupRepo();
   run(repoDir, ['init']);
   run(repoDir, ['start', 'Fix login bug']);
-  const output = run(repoDir, ['handoff', 'TASK-001', '--to', 'codex']);
+  // --print pins behavior to the legacy prompt format; tests must be
+  // deterministic regardless of which launchers are available locally.
+  const output = run(repoDir, ['handoff', 'TASK-001', '--to', 'codex', '--print']);
 
   const state = read(repoDir, '.harness/sessions/TASK-001/state.md');
   assert.match(state, /## Current Provider\ncodex/);
