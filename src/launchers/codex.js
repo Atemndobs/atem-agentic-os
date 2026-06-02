@@ -335,13 +335,13 @@ function makeCodexLauncher({
 
       // D.7: populate first_user_message in the threads SQLite row so
       // the project sidebar will actually render this thread. Codex
-      // hides empty threads. The model never actually responds to
-      // our seed turn (we exit before that), so the column would
-      // otherwise stay empty.
-      const sidebarRow = setFirstMessageFn(
-        thread.id,
-        `Pick up the ATEM handoff. Read \`atem://current/handoff\` first.`
-      );
+      // hides empty threads. The model never actually responds to our
+      // seed turn (we exit before that), so the column would otherwise
+      // stay empty. Use the full handoff prompt so Codex's
+      // auto-summarizer has something rich to work with — the thread
+      // title and preview that appear in the sidebar come from
+      // summarizing this message.
+      const sidebarRow = setFirstMessageFn(thread.id, input.handoffPrompt || `Pick up the ATEM handoff. Read \`atem://current/handoff\` first.`);
 
       // D.5: kick the running Codex Desktop to display the new thread.
       // Opt out with --no-focus (handled upstream by the caller passing
