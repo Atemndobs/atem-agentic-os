@@ -192,7 +192,12 @@ function makeCodexLauncher({ findBin = findCodexBinary, openUrlFn = openCodexThr
             cwd: input.targetRepo,
             serviceName: sidebarName,
             developerInstructions: devInstructions,
-            threadSource: 'subagent',
+            // `threadSource: 'user'` so Codex Desktop surfaces the
+            // thread in the project sidebar. `'subagent'` is reserved
+            // for background tool-calls Codex hides from the main UI.
+            // The handoff is a user-driven action even though ATEM
+            // is the technical originator.
+            threadSource: 'user',
             sessionStartSource: 'startup',
             approvalPolicy: 'on-request',
           });
