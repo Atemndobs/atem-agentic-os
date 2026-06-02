@@ -4450,6 +4450,9 @@ function main(argv) {
       case 'url':
         commandUrl(gitRoot, args);
         break;
+      case 'mcp-server':
+        // F.2: stdio MCP server. Doesn't return until stdin closes.
+        return require('./mcp-server.js').run();
       default:
         throw new Error(`Unknown command: ${command}`);
     }
