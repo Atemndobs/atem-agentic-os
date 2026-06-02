@@ -186,6 +186,32 @@ test('D.3: bridge client surfaces rpc error responses', async () => {
   await assert.rejects(p, /nope/);
 });
 
+test('D.6: registerThreadInDesktopCache writes the workspace hint atomically', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { registerThreadInDesktopCache } = require('../src/launchers/codex.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'atem-cache-'));
+  const codexDir = path.join(home, '.codex');
+  fs.mkdirSync(codexDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexDir, '.codex-global-state.json'),
+    JSON.stringify({ 'thread-workspace-root-hints': { 'existing-id': '/existing/path' } })
+  );
+  const ok = registerThreadInDesktopCache('new-id', '/new/repo', { homeDir: home });
+  assert.equal(ok, true);
+  const after = JSON.parse(fs.readFileSync(path.join(codexDir, '.codex-global-state.json'), 'utf8'));
+  assert.equal(after['thread-workspace-root-hints']['new-id'], '/new/repo');
+  assert.equal(after['thread-workspace-root-hints']['existing-id'], '/existing/path', 'must not clobber existing entries');
+});
+
+test('D.6: registerThreadInDesktopCache silently skips when state file missing', () => {
+  const { registerThreadInDesktopCache } = require('../src/launchers/codex.js');
+  const home = require('node:fs').mkdtempSync(require('node:os').tmpdir() + '/atem-cache-missing-');
+  const ok = registerThreadInDesktopCache('id', '/x', { homeDir: home });
+  assert.equal(ok, false);
+});
+
 test('D.5: codex launcher fires codex://threads/<id> deep link by default', async () => {
   const opens = [];
   const stubOpen = (id) => { opens.push(id); return `codex://threads/${id}`; };

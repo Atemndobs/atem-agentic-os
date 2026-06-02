@@ -120,6 +120,41 @@ async function withCodexBridge(bin, fn, { timeoutMs = 20000 } = {}) {
 
 // --- The launcher itself ----------------------------------------------------
 
+// Register the new thread in Codex Desktop's sidebar cache so it
+// appears in the project's chat list. Discovered empirically:
+//   ~/.codex/.codex-global-state.json
+//     thread-workspace-root-hints: { <threadId>: <cwd>, ... }
+// without this hint, the Desktop hides the thread from the project's
+// sidebar even when it's present in session_index.jsonl.
+//
+// Best-effort. If the file is missing or unparseable, silently skip —
+// the thread is still created and addressable by URL.
+function registerThreadInDesktopCache(threadId, cwd, { homeDir } = {}) {
+  if (!threadId || !cwd) return false;
+  const home = homeDir || os.homedir();
+  const stateFile = path.join(home, '.codex', '.codex-global-state.json');
+  if (!fs.existsSync(stateFile)) return false;
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  } catch { return false; }
+  if (!state || typeof state !== 'object') return false;
+  if (!state['thread-workspace-root-hints'] || typeof state['thread-workspace-root-hints'] !== 'object') {
+    state['thread-workspace-root-hints'] = {};
+  }
+  if (state['thread-workspace-root-hints'][threadId] === cwd) return true;
+  state['thread-workspace-root-hints'][threadId] = cwd;
+  const tmp = stateFile + '.atem-tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, stateFile);
+    return true;
+  } catch {
+    try { fs.unlinkSync(tmp); } catch { /* harmless */ }
+    return false;
+  }
+}
+
 // Fire the codex:// deep link so the running Desktop app jumps to the
 // new thread (and re-indexes that project's threads). URL scheme
 // discovered empirically from /Applications/Codex.app/Contents/Resources/app.asar
@@ -144,7 +179,11 @@ function openCodexThreadUrl(threadId, { spawnFn = spawn } = {}) {
   }
 }
 
-function makeCodexLauncher({ findBin = findCodexBinary, openUrlFn = openCodexThreadUrl } = {}) {
+function makeCodexLauncher({
+  findBin = findCodexBinary,
+  openUrlFn = openCodexThreadUrl,
+  registerInDesktopFn = registerThreadInDesktopCache,
+} = {}) {
   return {
     name: 'codex',
 
@@ -227,6 +266,11 @@ function makeCodexLauncher({ findBin = findCodexBinary, openUrlFn = openCodexThr
         return { kind: 'unavailable', reason: `codex bridge failed: ${error.message}` };
       }
 
+      // D.6: register the thread in Codex Desktop's sidebar cache.
+      // Without this, the thread is created and addressable by URL but
+      // doesn't show up in the project's chat list.
+      const cached = registerInDesktopFn(thread.id, input.targetRepo);
+
       // D.5: kick the running Codex Desktop to display the new thread.
       // Opt out with --no-focus (handled upstream by the caller passing
       // `focus: false`). Without this, Desktop's running app-server
@@ -237,13 +281,21 @@ function makeCodexLauncher({ findBin = findCodexBinary, openUrlFn = openCodexThr
         openedUrl = openUrlFn(thread.id);
       }
       const focusBlurb = openedUrl ? ` Codex Desktop opened at the new thread.` : '';
+      const cacheBlurb = cached ? '' : ' (sidebar registration skipped — Codex may need a restart to display this thread).';
       return {
         kind: 'launched',
-        summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`).${focusBlurb}`,
-        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl },
+        summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`).${focusBlurb}${cacheBlurb}`,
+        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl, sidebarRegistered: cached },
       };
     },
   };
 }
 
-module.exports = { makeCodexLauncher, findCodexBinary, withCodexBridge, makeBridgeClient, openCodexThreadUrl };
+module.exports = {
+  makeCodexLauncher,
+  findCodexBinary,
+  withCodexBridge,
+  makeBridgeClient,
+  openCodexThreadUrl,
+  registerThreadInDesktopCache,
+};
