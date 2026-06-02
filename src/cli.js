@@ -2535,6 +2535,82 @@ function commandUrl(gitRoot, args) {
   }
 }
 
+// F.3: install ATEM's MCP server into each provider's config.
+function commandInstall(args) {
+  const installer = require('./installer.js');
+  const dryRun = args.includes('--dry-run');
+  const perProject = args.includes('--project');
+  const list = args.includes('--list');
+
+  if (list) {
+    const rows = installer.listProviders().map((p) => [
+      p.name,
+      p.label,
+      p.detected ? `${ICONS.ok} detected` : `${ICONS.none} not detected`,
+      p.paths[0],
+    ]);
+    console.log(`${PRODUCT_NAME} install — providers`);
+    console.log(renderTable(['Provider', 'Label', 'Detection', 'Default config path'], rows));
+    return;
+  }
+
+  let names;
+  const firstPositional = args.find((a) => !a.startsWith('--'));
+  if (!firstPositional || firstPositional === 'all') {
+    names = installer.detectedProviders();
+    if (names.length === 0) {
+      console.log('No supported providers detected on this machine.');
+      return;
+    }
+  } else {
+    names = [firstPositional];
+  }
+
+  console.log(`${PRODUCT_NAME} install${dryRun ? ' (dry run)' : ''}`);
+  const rows = [];
+  for (const name of names) {
+    try {
+      const r = installer.installProvider(name, { dryRun, perProject });
+      rows.push([r.provider, r.label, badgeForStatus(r.status), r.path]);
+    } catch (e) {
+      rows.push([name, '', `${ICONS.fail} ${e.message}`, '']);
+    }
+  }
+  console.log(renderTable(['Provider', 'Label', 'Status', 'Path'], rows));
+  if (!dryRun) {
+    console.log('Restart the provider apps to load the new MCP server.');
+  }
+}
+
+function commandUninstall(args) {
+  const installer = require('./installer.js');
+  const target = args[0];
+  if (!target) throw new Error('Usage: atem uninstall <provider>|all');
+  const names = target === 'all' ? installer.detectedProviders() : [target];
+  console.log(`${PRODUCT_NAME} uninstall`);
+  const rows = [];
+  for (const name of names) {
+    try {
+      const r = installer.uninstallProvider(name);
+      rows.push([r.provider, r.label, badgeForStatus(r.status), r.path]);
+    } catch (e) {
+      rows.push([name, '', `${ICONS.fail} ${e.message}`, '']);
+    }
+  }
+  console.log(renderTable(['Provider', 'Label', 'Status', 'Path'], rows));
+}
+
+function badgeForStatus(s) {
+  if (s === 'added') return `${ICONS.ok} added`;
+  if (s === 'updated') return `${ICONS.ok} updated`;
+  if (s === 'unchanged') return `${ICONS.none} unchanged`;
+  if (s === 'removed') return `${ICONS.ok} removed`;
+  if (s === 'absent') return `${ICONS.none} absent`;
+  if (s === 'would-add') return `${ICONS.warn} would add`;
+  if (s === 'would-update') return `${ICONS.warn} would update`;
+  return s;
+}
+
 function commandIngestOmp(gitRoot, args) {
   const taskId = args[0];
   if (!taskId) {
@@ -4453,6 +4529,12 @@ function main(argv) {
       case 'mcp-server':
         // F.2: stdio MCP server. Doesn't return until stdin closes.
         return require('./mcp-server.js').run();
+      case 'install':
+        commandInstall(args);
+        break;
+      case 'uninstall':
+        commandUninstall(args);
+        break;
       default:
         throw new Error(`Unknown command: ${command}`);
     }
