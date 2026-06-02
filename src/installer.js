@@ -73,6 +73,17 @@ const TARGETS = {
     kind: 'json-mcpServers',
     detect: () => fs.existsSync(expandHome('~/.opencode')),
   },
+  antigravity: {
+    label: 'Antigravity',
+    paths: ['~/.antigravity/mcp.json'],
+    perProjectPath: '.antigravity/mcp.json',
+    kind: 'json-mcpServers',
+    // VS Code fork: dotdir holds extensions, Application Support holds user state.
+    // Either signal is enough to consider it installed.
+    detect: () =>
+      fs.existsSync(expandHome('~/.antigravity')) ||
+      fs.existsSync(expandHome('~/Library/Application Support/Antigravity')),
+  },
 };
 
 const SERVER_NAME = 'atem';

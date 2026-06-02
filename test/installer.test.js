@@ -225,6 +225,23 @@ test('F.3: atem install --list prints the provider table', () => {
   assert.match(out, /claude-code/);
   assert.match(out, /codex/);
   assert.match(out, /cursor/);
+  assert.match(out, /antigravity/, 'antigravity should appear in the providers list');
+});
+
+test('F.3: antigravity target writes JSON mcp config (VS Code fork convention)', () => {
+  const dir = mktmp('atem-install-antigrav-');
+  const file = path.join(dir, '.antigravity', 'mcp.json');
+  const r = installer.installJsonMcp(file, ENTRY);
+  assert.equal(r.status, 'added');
+  const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(j.mcpServers.atem, ENTRY);
+});
+
+test('F.3: antigravity detect() triggers on either ~/.antigravity or Application Support dir', () => {
+  const target = installer.TARGETS.antigravity;
+  assert.ok(target, 'antigravity target should exist');
+  assert.equal(typeof target.detect, 'function');
+  assert.equal(target.kind, 'json-mcpServers');
 });
 
 test('F.3: atem install <provider> --dry-run does not touch the filesystem', () => {
