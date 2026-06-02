@@ -2540,6 +2540,7 @@ function commandInstall(args) {
   const installer = require('./installer.js');
   const dryRun = args.includes('--dry-run');
   const perProject = args.includes('--project');
+  const withSkill = args.includes('--with-skill');
   const list = args.includes('--list');
 
   if (list) {
@@ -2570,8 +2571,11 @@ function commandInstall(args) {
   const rows = [];
   for (const name of names) {
     try {
-      const r = installer.installProvider(name, { dryRun, perProject });
+      const r = installer.installProvider(name, { dryRun, perProject, withSkill });
       rows.push([r.provider, r.label, badgeForStatus(r.status), r.path]);
+      if (r.skill) {
+        rows.push([`${name}:skill`, 'handoff skill', badgeForStatus(r.skill.status), r.skill.path]);
+      }
     } catch (e) {
       rows.push([name, '', `${ICONS.fail} ${e.message}`, '']);
     }

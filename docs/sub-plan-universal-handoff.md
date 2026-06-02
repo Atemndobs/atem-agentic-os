@@ -5,8 +5,9 @@
 > provider" core thesis.
 > Builds on: launcher table (D.1–D.8), `atem://` URL scheme, ambient
 > tasks, claude-code + codex distillers.
-> Status: drafted 2026-06-02
-> Phases F.1 → F.4, each independently shippable.
+> Status: **Complete 2026-06-02** — F.1 + F.2 + F.3 + F.4 shipped,
+> 118/118 tests pass. Five MCP providers detected on the test machine;
+> dry-run + idempotent live behavior confirmed.
 
 ---
 

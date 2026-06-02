@@ -171,6 +171,53 @@ function runAtem(args, env, cwd) {
   });
 }
 
+// --- F.4: Claude Code skill ---------------------------------------------
+
+test('F.4: installClaudeCodeSkill copies SKILL.md from dist/ into ~/.claude/skills/', () => {
+  const fakeHome = mktmp('atem-skill-install-');
+  const realHome = os.homedir();
+  // Point HOME at the temp dir so expandHome resolves there.
+  process.env.HOME = fakeHome;
+  try {
+    const r = installer.installClaudeCodeSkill({});
+    assert.equal(r.status, 'added');
+    assert.ok(r.path.startsWith(fakeHome));
+    const body = fs.readFileSync(r.path, 'utf8');
+    assert.match(body, /name: atem-handoff/);
+    assert.match(body, /Hand off the current coding session/);
+  } finally {
+    process.env.HOME = realHome;
+  }
+});
+
+test('F.4: installClaudeCodeSkill is idempotent on second run', () => {
+  const fakeHome = mktmp('atem-skill-idem-');
+  const realHome = os.homedir();
+  process.env.HOME = fakeHome;
+  try {
+    installer.installClaudeCodeSkill({});
+    const r = installer.installClaudeCodeSkill({});
+    assert.equal(r.status, 'unchanged');
+  } finally {
+    process.env.HOME = realHome;
+  }
+});
+
+test('F.4: --with-skill triggers the skill writer when installing claude-code', () => {
+  const fakeHome = mktmp('atem-skill-flag-');
+  const realHome = os.homedir();
+  process.env.HOME = fakeHome;
+  try {
+    fs.mkdirSync(path.join(fakeHome, '.claude'), { recursive: true });
+    const r = installer.installProvider('claude-code', { withSkill: true });
+    assert.ok(r.skill, 'skill result included');
+    assert.equal(r.skill.status, 'added');
+    assert.ok(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'atem-handoff', 'SKILL.md')));
+  } finally {
+    process.env.HOME = realHome;
+  }
+});
+
 test('F.3: atem install --list prints the provider table', () => {
   const home = mktmp('atem-install-list-');
   const out = runAtem(['install', '--list'], { HOME: home });

@@ -226,7 +226,7 @@ function uninstallCodexToml(file) {
 
 // ---- top-level orchestration --------------------------------------------
 
-function installProvider(name, { dryRun = false, perProject = false, entry, file: explicitFile } = {}) {
+function installProvider(name, { dryRun = false, perProject = false, withSkill = false, entry, file: explicitFile } = {}) {
   const target = TARGETS[name];
   if (!target) throw new Error(`Unknown provider for install: ${name}`);
   const mcpEntry = entry || defaultMcpEntry();
@@ -238,13 +238,36 @@ function installProvider(name, { dryRun = false, perProject = false, entry, file
       file = target.paths[0];
     }
   }
+  let result;
   if (target.kind === 'json-mcpServers') {
-    return { provider: name, label: target.label, ...installJsonMcp(file, mcpEntry, { dryRun }) };
+    result = { provider: name, label: target.label, ...installJsonMcp(file, mcpEntry, { dryRun }) };
+  } else if (target.kind === 'toml-mcp_servers') {
+    result = { provider: name, label: target.label, ...installCodexToml(file, mcpEntry, { dryRun }) };
+  } else {
+    throw new Error(`Unsupported target kind: ${target.kind}`);
   }
-  if (target.kind === 'toml-mcp_servers') {
-    return { provider: name, label: target.label, ...installCodexToml(file, mcpEntry, { dryRun }) };
+  // F.4: --with-skill installs the bundled SKILL.md for providers that
+  // have a known skills directory. Currently: claude-code.
+  if (withSkill && name === 'claude-code') {
+    const skillResult = installClaudeCodeSkill({ dryRun });
+    result.skill = skillResult;
   }
-  throw new Error(`Unsupported target kind: ${target.kind}`);
+  return result;
+}
+
+function installClaudeCodeSkill({ dryRun = false } = {}) {
+  const source = path.join(__dirname, '..', 'dist', 'skills', 'claude-code', 'handoff', 'SKILL.md');
+  const targetDir = expandHome('~/.claude/skills/atem-handoff');
+  const target = path.join(targetDir, 'SKILL.md');
+  if (!fs.existsSync(source)) return { status: 'missing-source', path: source };
+  let before = '';
+  try { before = fs.readFileSync(target, 'utf8'); } catch { /* not present */ }
+  const desired = fs.readFileSync(source, 'utf8');
+  if (before === desired) return { status: 'unchanged', path: target };
+  if (dryRun) return { status: before ? 'would-update' : 'would-add', path: target };
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.writeFileSync(target, desired);
+  return { status: before ? 'updated' : 'added', path: target };
 }
 
 function uninstallProvider(name) {
@@ -286,6 +309,7 @@ module.exports = {
   // Exposed for tests
   installJsonMcp,
   installCodexToml,
+  installClaudeCodeSkill,
   uninstallJson,
   uninstallCodexToml,
   expandHome,
