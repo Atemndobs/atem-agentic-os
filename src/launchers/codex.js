@@ -114,10 +114,16 @@ function makeBridgeClient(child) {
 }
 
 // One-shot helper: spawn the app-server, run a sequence of calls, close.
-async function withCodexBridge(bin, fn, { timeoutMs = 20000 } = {}) {
+//
+// `keepRunning: true` returns instead of killing the child, so the caller
+// can detach and let the turn/start finish in the background. This is how
+// we keep `atem handoff` fast (~3s) while still producing a real model
+// response so Codex Desktop's sidebar lists the thread.
+async function withCodexBridge(bin, fn, { timeoutMs = 20000, keepRunning = false } = {}) {
   const child = spawn(bin, ['app-server', '--listen', 'stdio://'], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
+    detached: keepRunning,
   });
   const stderrChunks = [];
   child.stderr.setEncoding('utf8');
@@ -133,9 +139,13 @@ async function withCodexBridge(bin, fn, { timeoutMs = 20000 } = {}) {
     return result;
   } finally {
     clearTimeout(timer);
-    client.close();
-    // Drain quickly; don't await forever.
-    try { child.kill('SIGTERM'); } catch { /* harmless */ }
+    if (!keepRunning) {
+      client.close();
+      try { child.kill('SIGTERM'); } catch { /* harmless */ }
+    } else {
+      // Detach the child so it survives our process exit.
+      try { child.unref(); } catch { /* harmless */ }
+    }
   }
 }
 
@@ -276,6 +286,11 @@ function makeCodexLauncher({
       let thread;
       let error;
       try {
+        // keepRunning: true → after we finish sending init+thread/start+
+        // turn/start, we detach the bridge child. The model response
+        // (~15s) keeps streaming in the background; Codex Desktop
+        // updates the sidebar when it sees real tokens used. atem
+        // handoff itself exits in ~3s.
         thread = await withCodexBridge(bin, async (client) => {
           // clientInfo.name → thread.originator. Codex Desktop hides
           // threads whose originator isn't 'Codex Desktop' from its
@@ -309,8 +324,11 @@ function makeCodexLauncher({
             await client.request('thread/name/set', { threadId: id, name: sidebarName });
           } catch { /* not fatal */ }
           // Send the first turn so Codex records that the thread has
-          // had input. The actual model response doesn't matter to us —
-          // the sidebar visibility comes from D.7's SQLite write below.
+          // had input AND will get a real model response. The bridge
+          // child stays alive (keepRunning) so the model response
+          // streams in the background after our CLI exits — that
+          // populates tokens_used and makes the sidebar surface the
+          // thread without a Codex restart.
           await client.request('turn/start', {
             threadId: id,
             input: [{ type: 'text', text: firstTurn }],
@@ -319,7 +337,7 @@ function makeCodexLauncher({
             id,
             path: startResult.thread.path || null,
           };
-        });
+        }, { keepRunning: true });
       } catch (e) {
         error = e;
       }
