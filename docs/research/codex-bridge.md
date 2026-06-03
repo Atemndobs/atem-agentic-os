@@ -285,6 +285,51 @@ The user's vision — *"pre-created Codex session waiting in the sidebar,
 scoped to the right worktree, primed with the handoff"* — is reachable
 without any browser automation, any UI scraping, or any new dependencies.
 
+## Known gap: workspace-root registration (worktree handoffs)
+
+Codex Desktop groups threads in the sidebar by git common ancestor.
+A thread opened with `cwd=<worktree>` is shown under the parent
+repo's project entry, not as its own project, regardless of the
+thread's cwd in SQLite. This is *Codex's* design.
+
+`~/.codex/.codex-global-state.json` does have the relevant keys:
+
+- `electron-saved-workspace-roots`: `[string]` — known projects
+- `project-order`: `[string]` — sidebar display order
+- `thread-workspace-root-hints`: `{ threadId: cwd }` — which project
+  a thread belongs to
+
+But the file is **owned by the Electron main process in memory**. Any
+external writes to the workspace-root or project-order keys get
+clobbered on the next flush. ATEM writes only `thread-workspace-root-
+hints` (which Codex doesn't overwrite). The cwd lives durably in
+the `threads` SQLite row's `cwd` column.
+
+The bridge does **not** expose a method for adding a workspace root
+or pinning a path as its own project. Probed methods (Nov 2026,
+codex 0.136.0-alpha.2): `config/value/write` writes the TOML config
+only; `externalAgentConfig/import` is for migrating other-AI configs
+not workspace registration. Full method list returned by an unknown
+method's error message — none match.
+
+### Upstream ask
+
+File an issue / FR with Codex requesting either:
+
+1. A bridge RPC such as `workspace/add` / `workspace/list` /
+   `workspace/setOrder` so external orchestrators (ATEM, agents,
+   editor integrations) can durably register projects without
+   racing the Electron preference store.
+2. Per-worktree pinning support — let a worktree path be elevated to
+   its own sidebar project entry rather than being collapsed under
+   the parent repo by git ancestor.
+
+Either would let ATEM produce a worktree handoff that appears as a
+distinct, scannable project in the Codex sidebar. Until then the
+title (`atem · <branch> · <short-id> ← <fromProvider>`) is the only
+disambiguator when multiple handoffs target different worktrees of
+the same repo.
+
 ## Reference paths
 
 - Codex binary: `/Applications/Codex.app/Contents/Resources/codex`

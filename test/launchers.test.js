@@ -205,6 +205,52 @@ test('D.6: registerThreadInDesktopCache writes the workspace hint atomically', (
   assert.equal(after['thread-workspace-root-hints']['existing-id'], '/existing/path', 'must not clobber existing entries');
 });
 
+test('buildSidebarName uses branch + short UUID tail + fromProvider', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+  const { buildSidebarName } = require('../src/launchers/codex.js');
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'atem-sb-repo-'));
+  execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'feat/ui'], { stdio: 'ignore' });
+  // git rev-parse --abbrev-ref HEAD needs at least one commit on most platforms
+  fs.writeFileSync(path.join(repo, 'x'), 'x');
+  execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x'], { stdio: 'ignore' });
+
+  const name = buildSidebarName({
+    syntheticId: 'claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952',
+    fromProvider: 'claude-code',
+    targetRepo: repo,
+  });
+  // Expected: atem · feat/ui · 8deddc952 ← claude-code  (last 8 of UUID tail)
+  assert.match(name, /^atem · feat\/ui · [0-9a-f]{8} ← claude-code$/);
+});
+
+test('buildSidebarName omits branch when targetRepo is not a git repo', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { buildSidebarName } = require('../src/launchers/codex.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atem-sb-nogit-'));
+  const name = buildSidebarName({
+    syntheticId: 'claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952',
+    fromProvider: 'codex',
+    targetRepo: dir,
+  });
+  assert.match(name, /^atem · [0-9a-f]{8} ← codex$/);
+});
+
+test('buildSidebarName falls back gracefully when syntheticId is not UUID-shaped', () => {
+  const { buildSidebarName } = require('../src/launchers/codex.js');
+  const name = buildSidebarName({
+    syntheticId: 'TASK-001',
+    fromProvider: null,
+    targetRepo: null,
+  });
+  assert.equal(name, 'atem · TASK-001');
+});
+
 test('D.6: registerThreadInDesktopCache silently skips when state file missing', () => {
   const { registerThreadInDesktopCache } = require('../src/launchers/codex.js');
   const home = require('node:fs').mkdtempSync(require('node:os').tmpdir() + '/atem-cache-missing-');

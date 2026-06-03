@@ -237,6 +237,14 @@ function setFirstUserMessage(threadId, message, { homeDir } = {}) {
 // without this hint, the Desktop hides the thread from the project's
 // sidebar even when it's present in session_index.jsonl.
 //
+// Note: Codex Desktop deliberately groups threads under the parent git
+// repo's project (by git common ancestor), so a thread opened in a
+// worktree appears under the main repo's sidebar entry, not under the
+// worktree path. We do NOT try to register the worktree as a separate
+// workspace root — Codex owns `electron-saved-workspace-roots` and
+// `project-order` in memory and will overwrite any external write on
+// its next flush. The thread title + git_branch are the disambiguator.
+//
 // Best-effort. If the file is missing or unparseable, silently skip —
 // the thread is still created and addressable by URL.
 function registerThreadInDesktopCache(threadId, cwd, { homeDir } = {}) {
@@ -262,6 +270,45 @@ function registerThreadInDesktopCache(threadId, cwd, { homeDir } = {}) {
   } catch {
     try { fs.unlinkSync(tmp); } catch { /* harmless */ }
     return false;
+  }
+}
+
+// Build the human-scannable sidebar title for a handoff thread.
+//
+// Codex Desktop groups threads under the parent git repo's project, so
+// the title is the only disambiguator when several handoffs target
+// different branches/worktrees of the same repo. Format:
+//
+//   atem · <branch> · <short-id> ← <fromProvider>
+//
+// Branch is read from `git -C <targetRepo> rev-parse --abbrev-ref HEAD`
+// best-effort; omitted on failure. Short-id is the last 8 chars of the
+// UUID-shaped tail of syntheticId (e.g. claude-code:1bdfa3c6-…-952 →
+// `…8deddc952`), or the trimmed syntheticId itself if it doesn't look
+// like a UUID. Falls back to the v0.1 format on any error so existing
+// behaviour is preserved.
+function buildSidebarName({ syntheticId, fromProvider, targetRepo }) {
+  try {
+    const id = String(syntheticId || '(unknown)');
+    const uuidMatch = id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-([0-9a-f]{12})/i);
+    const shortTail = uuidMatch ? uuidMatch[1].slice(-8) : id.slice(-12);
+    let branch = null;
+    if (targetRepo) {
+      try {
+        branch = execFileSync('git', ['-C', targetRepo, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim() || null;
+        if (branch === 'HEAD') branch = null; // detached
+      } catch { /* not a git repo / git unavailable */ }
+    }
+    const parts = ['atem'];
+    if (branch) parts.push(branch);
+    parts.push(shortTail);
+    const head = parts.join(' · ');
+    return fromProvider ? `${head} ← ${fromProvider}` : head;
+  } catch {
+    return `atem: ${syntheticId || '(unknown)'}${fromProvider ? ` ← ${fromProvider}` : ''}`;
   }
 }
 
@@ -310,7 +357,11 @@ function makeCodexLauncher({
       }
 
       const shortId = input.syntheticId || '(unknown)';
-      const sidebarName = `atem: ${shortId}${input.fromProvider ? ` ← ${input.fromProvider}` : ''}`;
+      const sidebarName = buildSidebarName({
+        syntheticId: shortId,
+        fromProvider: input.fromProvider,
+        targetRepo: input.targetRepo,
+      });
       const firstTurn = `Pick up the ATEM handoff. Read \`atem://current/handoff\` and \`atem://current/state\` first, then continue from where the previous provider left off.`;
 
       // The full handoff prompt becomes the thread's developer
@@ -424,4 +475,5 @@ module.exports = {
   registerThreadInDesktopCache,
   setFirstUserMessage,
   runCodexBridgeRunner,
+  buildSidebarName,
 };

@@ -2,7 +2,7 @@
 # ATEM Session Contract
 
 This repository is participating in an ATEM session-handoff workflow.
-Active task: `claude-code:e34143` (type: `implementation`), current provider: `codex`.
+Active task: `claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952` (type: `implementation`), current provider: `codex`.
 
 ## Before doing anything
 
@@ -20,11 +20,11 @@ symlinked under `~/.atem/handles/current/*.md` for providers whose
 tools only accept literal local paths.
 
 Concrete paths for this harness (snapshot):
-- `../../.atem/harness/sessions/claude-code:e34143/brief.md`
-- `../../.atem/harness/sessions/claude-code:e34143/state.md`
-- `../../.atem/harness/sessions/claude-code:e34143/handoff.md`
-- `../../.atem/harness/sessions/claude-code:e34143/next.md`
-- `../../.atem/harness/sessions/claude-code:e34143/decisions.md`
+- `../../.atem/harness/sessions/claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952/brief.md`
+- `../../.atem/harness/sessions/claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952/state.md`
+- `../../.atem/harness/sessions/claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952/handoff.md`
+- `../../.atem/harness/sessions/claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952/next.md`
+- `../../.atem/harness/sessions/claude-code:1bdfa3c6-d0ab-478e-abee-b7c8deddc952/decisions.md`
 
 ## Repository boundary
 
