@@ -6,6 +6,10 @@ First public version. Every workstream marked as **plumbing** in the
 master action plan is complete; ATEM ships as a working
 session-handoff layer across six providers.
 
+> **Naming officially recorded.** ATEM = **Agent Task Execution Mesh**.
+> See [`docs/decisions/001-atem-naming.md`](./docs/decisions/001-atem-naming.md).
+> Positioning: ATEM is the engine behind **HandoffOS**.
+
 ### Workstreams shipped
 
 - **W1 — Task Intent System**: typed tasks

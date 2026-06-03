@@ -1,7 +1,9 @@
 # ATEM
 
-> **Session handoff layer for AI coding agents.**
-> Hand off the same task — with full plan, decisions, and project context — between Claude Code, Codex, Cursor, OpenCode, omp, and human sessions, without losing context.
+> **Agent Task Execution Mesh.**
+> A local, file-backed handoff layer that connects AI coding agents across providers while preserving task state, decisions, validation, and next steps.
+
+ATEM is the execution mesh behind **HandoffOS** — the engine that lets Claude Code, Codex, Cursor, OpenCode, omp, and human sessions hand off the same task without losing context.
 
 ```sh
 atem handoff claude-code:e34143 --to codex --repo ~/sites/foo

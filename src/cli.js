@@ -4,7 +4,9 @@ const os = require('node:os');
 const { execSync, execFileSync } = require('node:child_process');
 
 const PRODUCT_NAME = 'ATEM';
-const PRODUCT_TAGLINE = 'Session handoff for AI coding agents, backed by Git.';
+// ATEM = Agent Task Execution Mesh.
+// See docs/decisions/001-atem-naming.md for the rationale.
+const PRODUCT_TAGLINE = 'Agent Task Execution Mesh — session handoff for AI coding agents.';
 const GLOBAL_STATE_DIR = path.join(os.homedir(), '.atem', 'harness');
 
 const synthetic = require('./synthetic.js');
