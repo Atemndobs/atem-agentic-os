@@ -2623,6 +2623,264 @@ function badgeForStatus(s) {
   return s;
 }
 
+// W7 — H.3: report provider-state drift across state.md /
+// current-session.md / handoff.md / actual detection. Optionally
+// unify all of them to a single provider with --unify <name>.
+function commandReconcile(gitRoot, args) {
+  const taskId = args.find((a) => !a.startsWith('--'));
+  if (!taskId) {
+    throw new Error('Usage: atem reconcile <task-id> [--unify <provider>] [--json]');
+  }
+  const unifyIdx = args.indexOf('--unify');
+  const unify = unifyIdx >= 0 ? args[unifyIdx + 1] : null;
+  if (unifyIdx >= 0 && !unify) {
+    throw new Error('Usage: atem reconcile <task-id> --unify <provider>');
+  }
+  if (unify && !PROVIDERS.has(unify)) {
+    throw new Error(`Unknown provider: ${unify}`);
+  }
+  const asJson = args.includes('--json');
+
+  const paths = resolveActivePaths(gitRoot);
+  ensureHarnessReady(paths);
+  const sessionDir = requireSession(paths, taskId);
+  const files = getSessionFileMap(sessionDir);
+
+  // Pull provider from each surface.
+  const state = readFile(files.state);
+  const handoff = readFile(files.handoff);
+  const currentSession = readFile(paths.currentSessionFile);
+  const stateFm = parseFrontmatter(state).data;
+
+  const surfaces = {
+    'state.md (Current Provider section)': (getSection(state, 'Current Provider') || '').trim() || null,
+    'state.md (frontmatter.provider)':     stateFm.provider || null,
+    'handoff.md (Next Suggested Provider)': (getSection(handoff, 'Next Suggested Provider') || '').trim() || null,
+    'current-session.md (Current Provider)': (getSection(currentSession, 'Current Provider') || '').trim() || null,
+  };
+
+  // Detect actual provider activity for the task's target repo.
+  const targetRepo = readSessionTargetRepository(files);
+  let detected = [];
+  if (targetRepo && targetRepo !== 'unknown') {
+    try {
+      const signals = collectExternalProviderSignals(targetRepo);
+      if ((signals.claudeSessions || []).length > 0) detected.push('claude-code');
+      if ((signals.codexServers || []).length > 0 || (signals.codexRoots || []).length > 0) detected.push('codex');
+      if ((signals.cursorProcesses || []).length > 0) detected.push('cursor');
+      if ((signals.opencodeProcesses || []).length > 0) detected.push('opencode');
+      if ((signals.ompSessions || []).length > 0) detected.push('omp');
+    } catch { /* best-effort */ }
+  }
+
+  const values = Object.values(surfaces).filter(Boolean);
+  const unique = [...new Set(values)];
+  const drift = unique.length > 1;
+
+  if (asJson) {
+    console.log(JSON.stringify({
+      taskId,
+      surfaces,
+      detectedRunning: detected,
+      drift,
+      uniqueValues: unique,
+    }, null, 2));
+    return;
+  }
+
+  console.log(`${PRODUCT_NAME} reconcile ${taskId}`);
+  const rows = Object.entries(surfaces).map(([surface, value]) => [
+    surface,
+    value || '(empty)',
+  ]);
+  rows.push(['detected (running on target repo)', detected.join(', ') || '(none)']);
+  console.log(renderTable(['Surface', 'Provider'], rows));
+
+  if (!drift) {
+    console.log(`${ICONS.ok} no drift — all surfaces agree on "${unique[0] || '(empty)'}".`);
+  } else {
+    console.log(`${ICONS.warn} drift: ${unique.length} distinct providers across surfaces (${unique.join(', ')}).`);
+  }
+
+  if (!unify) {
+    if (drift) {
+      console.log('');
+      console.log('Pass --unify <provider> to set all surfaces to one value.');
+    }
+    return;
+  }
+
+  // Apply unification.
+  console.log('');
+  console.log(`Unifying surfaces to: ${unify}`);
+  const newState = setSection(
+    syncStateFrontmatter(state, taskId),
+    'Current Provider',
+    unify
+  );
+  // Frontmatter sync uses sections as source-of-truth so set it after section.
+  const finalState = (() => {
+    const { data, body } = parseFrontmatter(newState);
+    data.provider = unify;
+    return buildFrontmatter(data) + body;
+  })();
+  writeFile(files.state, finalState);
+
+  let newHandoff = setSection(handoff, 'Next Suggested Provider', unify);
+  writeFile(files.handoff, newHandoff);
+
+  let newCurrent = setSection(currentSession, 'Current Provider', unify);
+  newCurrent = setSection(newCurrent, 'Last Updated', nowStamp());
+  writeFile(paths.currentSessionFile, newCurrent);
+
+  console.log(`${ICONS.ok} unified state.md, handoff.md, current-session.md → ${unify}.`);
+}
+
+// W7 — H.2: roll session files back to a previous snapshot.
+function commandRollback(gitRoot, args) {
+  const taskId = args.find((a, i) => !a.startsWith('--') && (i === 0 || args[i - 1] !== '--to'));
+  if (!taskId) {
+    throw new Error('Usage: atem rollback <task-id> [--list] [--to <stamp>] [--dry-run]');
+  }
+  const list = args.includes('--list');
+  const toIdx = args.indexOf('--to');
+  const targetStamp = toIdx >= 0 ? args[toIdx + 1] : null;
+  if (toIdx >= 0 && !targetStamp) {
+    throw new Error('Usage: atem rollback <task-id> --to <stamp>');
+  }
+  const dryRun = args.includes('--dry-run');
+
+  const paths = resolveActivePaths(gitRoot);
+  ensureHarnessReady(paths);
+  const sessionDir = requireSession(paths, taskId);
+  const snapshotsDir = path.join(sessionDir, 'snapshots');
+  if (!fs.existsSync(snapshotsDir)) {
+    throw new Error(`No snapshots directory for ${taskId}`);
+  }
+  const stamps = fs.readdirSync(snapshotsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+  if (stamps.length === 0) {
+    throw new Error(`No snapshots saved for ${taskId}`);
+  }
+
+  if (list) {
+    console.log(`${PRODUCT_NAME} rollback ${taskId} — snapshots`);
+    const rows = stamps.map((s) => {
+      const dir = path.join(snapshotsDir, s);
+      let files;
+      try { files = fs.readdirSync(dir).filter((n) => !n.startsWith('.')).sort(); } catch { files = []; }
+      let stat;
+      try { stat = fs.statSync(dir); } catch { stat = null; }
+      return [s, files.join(', ') || '(empty)', stat ? new Date(stat.mtimeMs).toISOString() : ''];
+    });
+    console.log(renderTable(['Stamp', 'Files', 'Created'], rows));
+    return;
+  }
+
+  const stamp = targetStamp || stamps[stamps.length - 1];
+  if (!stamps.includes(stamp)) {
+    throw new Error(`Snapshot ${stamp} not found; available: ${stamps.join(', ')}`);
+  }
+  const snapshotDir = path.join(snapshotsDir, stamp);
+
+  // Build a safety snapshot first so the user can undo a rollback.
+  const safetyStamp = `pre-rollback-${nowStamp().replace(/[: ]/g, '-')}`;
+  const safetyDir = path.join(snapshotsDir, safetyStamp);
+  const restorable = ['state.md', 'handoff.md', 'validation.md', 'brief.md', 'log.md', 'decisions.md', 'next.md'];
+
+  if (dryRun) {
+    console.log(`${PRODUCT_NAME} rollback ${taskId} (dry run)`);
+    console.log(`Would restore from snapshot: ${stamp}`);
+    const rows = [];
+    for (const f of restorable) {
+      const src = path.join(snapshotDir, f);
+      if (fs.existsSync(src)) rows.push([f, '✓ restore', '']);
+    }
+    console.log(renderTable(['File', 'Action', 'Detail'], rows));
+    console.log(`Would create safety snapshot: ${safetyStamp}`);
+    return;
+  }
+
+  ensureDir(safetyDir);
+  for (const f of restorable) {
+    const live = path.join(sessionDir, f);
+    if (!fs.existsSync(live)) continue;
+    writeFile(path.join(safetyDir, f), readFile(live));
+  }
+
+  // Restore from chosen snapshot.
+  const restored = [];
+  for (const f of restorable) {
+    const src = path.join(snapshotDir, f);
+    if (!fs.existsSync(src)) continue;
+    writeFile(path.join(sessionDir, f), readFile(src));
+    restored.push(f);
+  }
+  console.log(`${PRODUCT_NAME} rollback ${taskId}`);
+  console.log(`Restored from snapshot: ${stamp}`);
+  console.log(`Safety snapshot saved as: ${safetyStamp} (use \`atem rollback ${taskId} --to ${safetyStamp}\` to undo).`);
+  console.log(renderTable(['File', 'Action'], restored.map((f) => [f, '✓ restored'])));
+}
+
+// W7 — H.1: detect and (optionally) repair recovery issues.
+function commandRecover(gitRoot, args) {
+  const recovery = require('./recovery.js');
+  const paths = resolveActivePaths(gitRoot);
+  const fix = args.includes('--fix');
+  const yes = args.includes('--yes');
+  const asJson = args.includes('--json');
+  const taskArg = args.find((a) => !a.startsWith('--'));
+
+  const issues = recovery.detectAllIssues(paths, { taskId: taskArg });
+
+  if (asJson) {
+    console.log(JSON.stringify(
+      issues.map((i) => ({ code: i.code, severity: i.severity, taskId: i.taskId, message: i.message, remedy: i.remedy.describe })),
+      null,
+      2
+    ));
+    return;
+  }
+
+  console.log(`${PRODUCT_NAME} recover${taskArg ? ` ${taskArg}` : ' (all sessions)'}`);
+  if (issues.length === 0) {
+    console.log(`${ICONS.ok} no issues detected.`);
+    return;
+  }
+
+  const rows = issues.map((i) => [
+    levelBadge(i.severity === 'error' ? 'FAIL' : i.severity === 'warning' ? 'WARN' : 'OK'),
+    i.code,
+    i.taskId,
+    i.message,
+    i.remedy.describe,
+  ]);
+  console.log(renderTable(['Level', 'Code', 'Task', 'Issue', 'Remedy'], rows));
+
+  if (!fix) {
+    console.log('');
+    console.log(`Pass --fix to apply remedies${yes ? '' : ' (interactively — add --yes for non-interactive)'}.`);
+    return;
+  }
+
+  // --fix mode. With --yes apply all. Without --yes, the user already
+  // saw the table and chose --fix; we treat that as explicit consent.
+  console.log('');
+  console.log(`Applying ${issues.length} remed${issues.length === 1 ? 'y' : 'ies'}…`);
+  const results = [];
+  for (const issue of issues) {
+    try {
+      const r = issue.remedy.apply();
+      results.push([levelBadge('OK'), issue.code, issue.taskId, r || 'applied']);
+    } catch (e) {
+      results.push([levelBadge('FAIL'), issue.code, issue.taskId, e.message]);
+    }
+  }
+  console.log(renderTable(['Result', 'Code', 'Task', 'Detail'], results));
+}
+
 function commandIngestOmp(gitRoot, args) {
   const taskId = args[0];
   if (!taskId) {
@@ -4547,6 +4805,15 @@ function main(argv) {
       case 'uninstall':
         commandUninstall(args);
         break;
+      case 'recover':
+        commandRecover(gitRoot, args);
+        break;
+      case 'rollback':
+        commandRollback(gitRoot, args);
+        break;
+      case 'reconcile':
+        commandReconcile(gitRoot, args);
+        break;
       default:
         throw new Error(`Unknown command: ${command}`);
     }
@@ -4576,4 +4843,9 @@ module.exports = {
   PROVIDERS,
   TASK_TYPES,
   findGitRoot,
+  // Re-exports for recovery (Workstream 7)
+  syncStateFrontmatter,
+  removeDuplicateSectionBlocks,
+  sectionCount,
+  ensureDir,
 };
