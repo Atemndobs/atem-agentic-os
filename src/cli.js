@@ -530,10 +530,15 @@ function ensureHarnessReady(paths) {
 }
 
 function commandInit(gitRoot) {
-  const paths = gitRoot ? getRepoPaths(gitRoot) : getGlobalPaths();
+  // Use the same mode resolution as every other command. Previously
+  // init defaulted to repo-mode whenever it found a git root, while
+  // start/status/doctor/etc. defaulted to global mode — so
+  // `atem init && atem doctor` initialized one store and inspected
+  // another. Make init follow ATEM_HARNESS_MODE like everything else.
+  const paths = resolveActivePaths(gitRoot);
   initializeHarness(paths);
   if (paths.mode === 'repo') {
-    console.log('Initialized project handoff store: .harness/');
+    console.log(`Initialized project handoff store: ${paths.harnessDir}`);
     return;
   }
   console.log(`Initialized global handoff store: ${paths.harnessDir}`);
@@ -2425,6 +2430,7 @@ function commandHandoff(gitRoot, args) {
   const launchers = require('./launchers/index.js');
   const registry = launchers.defaultRegistry();
   const noFocus = args.includes('--no-focus');
+  const noRespond = args.includes('--no-respond');
   const input = {
     syntheticId: taskId,
     fromProvider: provider ? (readSessionFrontmatterProvider(files) || 'unknown') : 'unknown',
@@ -2436,6 +2442,7 @@ function commandHandoff(gitRoot, args) {
     agentsMdPath,
     fromCli: true,
     focus: !noFocus,
+    noRespond,
   };
 
   (async () => {

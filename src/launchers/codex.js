@@ -113,6 +113,56 @@ function makeBridgeClient(child) {
   return { request, close, waitForNotification };
 }
 
+// Spawn codex-runner.js as a detached child, wait for its single
+// "ready" event line, then disown it. The runner owns the codex
+// app-server child's lifecycle and self-terminates after turn/completed
+// (or a hard 2-minute ceiling), so no orphan `codex app-server`
+// processes linger after the model response finishes.
+function runCodexBridgeRunner(params) {
+  const runnerScript = path.join(__dirname, 'codex-runner.js');
+  return new Promise((resolve, reject) => {
+    const argBlob = Buffer.from(JSON.stringify(params)).toString('base64');
+    const child = spawn(process.execPath, [runnerScript, argBlob], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      detached: true,
+      env: process.env,
+    });
+    let buffer = '';
+    let resolved = false;
+    const onChunk = (chunk) => {
+      buffer += chunk.toString('utf8');
+      const i = buffer.indexOf('\n');
+      if (i < 0) return;
+      const firstLine = buffer.slice(0, i);
+      let msg;
+      try { msg = JSON.parse(firstLine); } catch { /* keep reading */ return; }
+      resolved = true;
+      child.stdout.off('data', onChunk);
+      // Disown the runner. It continues processing the turn in the
+      // background and self-terminates when done. We exit immediately.
+      try { child.unref(); } catch { /* harmless */ }
+      try { child.stdout.unref && child.stdout.unref(); } catch { /* harmless */ }
+      if (msg.event === 'ready') {
+        resolve({ id: msg.threadId, path: msg.threadPath });
+      } else {
+        reject(new Error(msg.message || 'codex-runner failed before ready'));
+      }
+    };
+    child.stdout.on('data', onChunk);
+    child.on('error', (e) => { if (!resolved) reject(e); });
+    child.on('exit', (code) => {
+      if (resolved) return;
+      reject(new Error(`codex-runner exited (code ${code}) before ready`));
+    });
+    // Safety: if the runner never emits ready within 20s, give up.
+    setTimeout(() => {
+      if (resolved) return;
+      try { child.kill('SIGTERM'); } catch { /* harmless */ }
+      reject(new Error('codex-runner timed out before ready'));
+    }, 20_000).unref();
+  });
+}
+
 // One-shot helper: spawn the app-server, run a sequence of calls, close.
 //
 // `keepRunning: true` returns instead of killing the child, so the caller
@@ -286,58 +336,41 @@ function makeCodexLauncher({
       let thread;
       let error;
       try {
-        // keepRunning: true → after we finish sending init+thread/start+
-        // turn/start, we detach the bridge child. The model response
-        // (~15s) keeps streaming in the background; Codex Desktop
-        // updates the sidebar when it sees real tokens used. atem
-        // handoff itself exits in ~3s.
-        thread = await withCodexBridge(bin, async (client) => {
-          // clientInfo.name → thread.originator. Codex Desktop hides
-          // threads whose originator isn't 'Codex Desktop' from its
-          // project sidebar. We identify the actual tool via `title`
-          // so the Desktop's analytics + audit still see ATEM, but
-          // the sidebar filter passes. Empirically verified by diffing
-          // a visible thread vs. one of ours: the only differing
-          // header field was `originator`.
-          await client.request('initialize', {
-            clientInfo: { name: 'Codex Desktop', title: 'atem', version: '0.1.0' },
+        if (input.noRespond) {
+          // --no-respond: create the thread synchronously and exit.
+          // No detached runner, no background turn, no model tokens
+          // spent. Sidebar visibility comes solely from the SQLite
+          // write below. The thread won't have a model response
+          // until the user opens it and types — that's the trade.
+          thread = await withCodexBridge(bin, async (client) => {
+            await client.request('initialize', {
+              clientInfo: { name: 'Codex Desktop', title: 'atem', version: '0.1.0' },
+            });
+            const startResult = await client.request('thread/start', {
+              cwd: input.targetRepo,
+              serviceName: sidebarName,
+              developerInstructions: devInstructions,
+              threadSource: 'user',
+              sessionStartSource: 'startup',
+              approvalPolicy: 'on-request',
+            });
+            const id = startResult && startResult.thread && startResult.thread.id;
+            if (!id) throw new Error('thread/start returned no id');
+            try { await client.request('thread/name/set', { threadId: id, name: sidebarName }); } catch { /* not fatal */ }
+            return { id, path: startResult.thread.path || null };
           });
-          const startResult = await client.request('thread/start', {
+        } else {
+          // Default: drive the full thread/start + turn/start through
+          // the runner script. The runner self-terminates after
+          // turn/completed, so no orphan codex app-server processes.
+          thread = await runCodexBridgeRunner({
+            bin,
             cwd: input.targetRepo,
-            serviceName: sidebarName,
-            developerInstructions: devInstructions,
-            // `threadSource: 'user'` so Codex Desktop surfaces the
-            // thread in the project sidebar. `'subagent'` is reserved
-            // for background tool-calls Codex hides from the main UI.
-            // The handoff is a user-driven action even though ATEM
-            // is the technical originator.
-            threadSource: 'user',
-            sessionStartSource: 'startup',
-            approvalPolicy: 'on-request',
+            sidebarName,
+            devInstructions,
+            firstTurn,
           });
-          const id = startResult && startResult.thread && startResult.thread.id;
-          if (!id) throw new Error('thread/start returned no id');
-          // Best-effort: name the thread for the sidebar (some Codex
-          // versions key on `serviceName` already, but this is the
-          // documented label setter).
-          try {
-            await client.request('thread/name/set', { threadId: id, name: sidebarName });
-          } catch { /* not fatal */ }
-          // Send the first turn so Codex records that the thread has
-          // had input AND will get a real model response. The bridge
-          // child stays alive (keepRunning) so the model response
-          // streams in the background after our CLI exits — that
-          // populates tokens_used and makes the sidebar surface the
-          // thread without a Codex restart.
-          await client.request('turn/start', {
-            threadId: id,
-            input: [{ type: 'text', text: firstTurn }],
-          });
-          return {
-            id,
-            path: startResult.thread.path || null,
-          };
-        }, { keepRunning: true });
+        }
       } catch (e) {
         error = e;
       }
@@ -372,10 +405,11 @@ function makeCodexLauncher({
       }
       const focusBlurb = openedUrl ? ` Codex Desktop opened at the new thread.` : '';
       const cacheBlurb = (cached || sidebarRow) ? '' : ' (sidebar registration skipped — Codex may need a restart to display this thread).';
+      const respondBlurb = input.noRespond ? ' (no-respond: model won\'t run until you open the thread).' : '';
       return {
         kind: 'launched',
-        summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`).${focusBlurb}${cacheBlurb}`,
-        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl, sidebarRegistered: cached, sqliteRow: sidebarRow },
+        summary: `codex: created thread ${thread.id.slice(0, 8)}… (\`${sidebarName}\`).${focusBlurb}${cacheBlurb}${respondBlurb}`,
+        metadata: { threadId: thread.id, threadPath: thread.path, sidebarName, openedUrl, sidebarRegistered: cached, sqliteRow: sidebarRow, noRespond: !!input.noRespond },
       };
     },
   };
@@ -389,4 +423,5 @@ module.exports = {
   openCodexThreadUrl,
   registerThreadInDesktopCache,
   setFirstUserMessage,
+  runCodexBridgeRunner,
 };
