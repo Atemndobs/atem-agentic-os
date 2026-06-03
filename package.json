@@ -2,12 +2,39 @@
   "name": "atem-agentic-os",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first session routing CLI",
+  "description": "Session handoff layer for AI coding agents — claude-code, codex, cursor, opencode, omp, and human sessions sharing one continuity contract.",
   "type": "commonjs",
   "bin": {
     "atem": "bin/atem.js"
   },
   "scripts": {
     "test": "node --test"
-  }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "docs/action-plan.md",
+    "docs/url-scheme.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "handoff",
+    "session",
+    "claude-code",
+    "codex",
+    "cursor",
+    "opencode",
+    "omp",
+    "mcp",
+    "cli"
+  ],
+  "license": "MIT"
 }
