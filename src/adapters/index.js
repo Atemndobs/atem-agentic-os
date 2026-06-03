@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const session = require('./session.js');
 const omp = require('./omp.js');
 const claudeCode = require('./claude-code.js');
+const cursor = require('./cursor.js');
 const url = require('../url.js');
 const synthetic = require('../synthetic.js');
 
@@ -331,10 +332,68 @@ const claudeCodeAdapter = makeProviderAdapter('claude-code', {
   },
 });
 
+// Cursor adapter: same shape as claude-code. Reads the per-workspace
+// composer index (workspaceStorage/<md5>/state.vscdb) and the global
+// content store (globalStorage/state.vscdb). See
+// docs/research/cursor-session-layout.md.
+const cursorAdapter = makeProviderAdapter('cursor', {
+  external: {
+    getRootDir: cursor.getRootDir,
+    getGlobalDbPath: cursor.getGlobalDbPath,
+    listWorkspacesForCwd: cursor.listWorkspacesForCwd,
+    listComposersForCwd: cursor.listComposersForCwd,
+    findLatestComposerForCwd: cursor.findLatestComposerForCwd,
+    findSessionFileById: cursor.findSessionFileById,
+    findLatestSessionFile: cursor.findLatestSessionFile,
+    distill: cursor.distillSessionSync,
+    distillLatestForCwd: cursor.distillLatestForCwd,
+  },
+  resolveSynthetic(syntheticId, artifact) {
+    const parsed = synthetic.parseSyntheticId(syntheticId);
+    if (!parsed || parsed.provider !== 'cursor') {
+      throw new Error(`not a cursor synthetic id: ${syntheticId}`);
+    }
+    const dbPath = cursor.findSessionFileById(parsed.providerSessionId);
+    if (!dbPath) throw new Error(`cursor composer not found for ${parsed.providerSessionId}`);
+    const distilled = cursor.distillSessionSync(parsed.providerSessionId);
+    if (!distilled) throw new Error(`failed to distill cursor composer ${parsed.providerSessionId}`);
+    return {
+      content: renderSyntheticArtifact('cursor', distilled, artifact, syntheticId),
+      mimeType: 'text/markdown',
+      metadata: { sessionFile: dbPath, sessionId: distilled.sessionId },
+    };
+  },
+  ingest(taskId, taskOpts = {}) {
+    let composerId = taskOpts.sessionId || null;
+    if (!composerId && taskOpts.cwd) {
+      const latest = cursor.findLatestComposerForCwd(taskOpts.cwd);
+      if (latest) composerId = latest.composerId;
+    }
+    if (!composerId) {
+      throw new Error('cursor.ingest: no composer found (provide sessionId or cwd)');
+    }
+    const d = cursor.distillSessionSync(composerId, { cwd: taskOpts.cwd || '' });
+    if (!d) throw new Error(`cursor.ingest: failed to distill ${composerId}`);
+    const summary = d.summary
+      || d.lastAssistantText
+      || (d.pausedMidTool ? 'cursor paused mid tool-call' : 'cursor session in progress');
+    session.updateSession(taskId, { provider: 'cursor', summary });
+    session.logEvent(taskId, `[cursor] ingested composer ${d.sessionId}`);
+    if (d.firstTask) {
+      session.recordDecision(taskId, {
+        decision: 'cursor first-task captured',
+        reason: d.firstTask,
+        impact: d.mode ? `mode: ${d.mode}` : '',
+      });
+    }
+    return d;
+  },
+});
+
 const adapters = {
   'claude-code': claudeCodeAdapter,
   codex: makeProviderAdapter('codex'),
-  cursor: makeProviderAdapter('cursor'),
+  cursor: cursorAdapter,
   opencode: makeProviderAdapter('opencode'),
   openrouter: makeProviderAdapter('openrouter'),
   omp: ompAdapter,
@@ -348,4 +407,4 @@ function get(providerName) {
   return a;
 }
 
-module.exports = { session, adapters, get, omp, claudeCode, url, readUrl, writeUrl, hashContent };
+module.exports = { session, adapters, get, omp, claudeCode, cursor, url, readUrl, writeUrl, hashContent };

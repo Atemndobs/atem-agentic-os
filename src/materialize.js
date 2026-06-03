@@ -102,6 +102,18 @@ function materializeSyntheticTask(syntheticId, paths, opts = {}) {
     }
     distilled = cc.distillSessionSync(file);
     if (!distilled) throw new Error(`failed to distill ${file}`);
+  } else if (parsed.provider === 'cursor') {
+    const cr = registry.cursor;
+    let composerId = parsed.providerSessionId;
+    if (!cr.findSessionFileById(composerId) && opts.cwd) {
+      const latest = cr.findLatestComposerForCwd(opts.cwd);
+      if (latest) composerId = latest.composerId;
+    }
+    if (!cr.findSessionFileById(composerId)) {
+      throw new Error(`cursor composer not found for ${syntheticId}; pass --cursor-cwd`);
+    }
+    distilled = cr.distillSessionSync(composerId, { cwd: opts.cwd || '' });
+    if (!distilled) throw new Error(`failed to distill cursor composer ${composerId}`);
   }
 
   const taskType = opts.taskType || inferTaskType(parsed.provider, distilled);
