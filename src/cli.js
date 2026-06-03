@@ -2407,9 +2407,10 @@ function commandHandoff(gitRoot, args) {
   const taskType = resolveTaskTypeFromSessionFiles(files);
 
   // Drop AGENTS.md at the target repo when handing off TO a provider that
-  // honors it (omp + codex). Idempotent — only replaces our marked block.
+  // honors it (omp + codex + opencode). Idempotent — only replaces our
+  // marked block.
   let agentsMdPath = null;
-  if (provider && (provider === 'omp' || provider === 'codex') && resolvedTargetRepo) {
+  if (provider && (provider === 'omp' || provider === 'codex' || provider === 'opencode') && resolvedTargetRepo) {
     agentsMdPath = writeAgentsMd(resolvedTargetRepo, taskId, paths, taskType, provider);
     if (agentsMdPath) {
       console.error(`# ATEM: wrote handoff block to ${agentsMdPath}`);

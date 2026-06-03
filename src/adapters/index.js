@@ -9,6 +9,7 @@ const session = require('./session.js');
 const omp = require('./omp.js');
 const claudeCode = require('./claude-code.js');
 const cursor = require('./cursor.js');
+const opencode = require('./opencode.js');
 const url = require('../url.js');
 const synthetic = require('../synthetic.js');
 
@@ -390,11 +391,66 @@ const cursorAdapter = makeProviderAdapter('cursor', {
   },
 });
 
+// OpenCode adapter: SQLite-backed, cleanest of all. See
+// docs/research/opencode-session-layout.md.
+const opencodeAdapter = makeProviderAdapter('opencode', {
+  external: {
+    getDbPath: opencode.getDbPath,
+    listSessionsForCwd: opencode.listSessionsForCwd,
+    findLatestSessionForCwd: opencode.findLatestSessionForCwd,
+    findSessionFileById: opencode.findSessionFileById,
+    findLatestSessionFile: opencode.findLatestSessionFile,
+    distill: opencode.distillSessionSync,
+    distillLatestForCwd: opencode.distillLatestForCwd,
+  },
+  resolveSynthetic(syntheticId, artifact) {
+    const parsed = synthetic.parseSyntheticId(syntheticId);
+    if (!parsed || parsed.provider !== 'opencode') {
+      throw new Error(`not an opencode synthetic id: ${syntheticId}`);
+    }
+    if (!opencode.findSessionFileById(parsed.providerSessionId)) {
+      throw new Error(`opencode session not found for ${parsed.providerSessionId}`);
+    }
+    const distilled = opencode.distillSessionSync(parsed.providerSessionId);
+    if (!distilled) throw new Error(`failed to distill opencode session ${parsed.providerSessionId}`);
+    return {
+      content: renderSyntheticArtifact('opencode', distilled, artifact, syntheticId),
+      mimeType: 'text/markdown',
+      metadata: { sessionFile: opencode.getDbPath(), sessionId: distilled.sessionId },
+    };
+  },
+  ingest(taskId, taskOpts = {}) {
+    let sessionId = taskOpts.sessionId || null;
+    if (!sessionId && taskOpts.cwd) {
+      const latest = opencode.findLatestSessionForCwd(taskOpts.cwd);
+      if (latest) sessionId = latest.id;
+    }
+    if (!sessionId) {
+      throw new Error('opencode.ingest: no session found (provide sessionId or cwd)');
+    }
+    const d = opencode.distillSessionSync(sessionId, { cwd: taskOpts.cwd });
+    if (!d) throw new Error(`opencode.ingest: failed to distill ${sessionId}`);
+    const summary = d.summary
+      || d.lastAssistantText
+      || (d.pausedMidTool ? 'opencode paused mid tool-call' : 'opencode session in progress');
+    session.updateSession(taskId, { provider: 'opencode', summary });
+    session.logEvent(taskId, `[opencode] ingested session ${d.sessionId}`);
+    if (d.firstTask) {
+      session.recordDecision(taskId, {
+        decision: 'opencode first-task captured',
+        reason: d.firstTask,
+        impact: d.model ? `model: ${d.model}, mode: ${d.mode}` : '',
+      });
+    }
+    return d;
+  },
+});
+
 const adapters = {
   'claude-code': claudeCodeAdapter,
   codex: makeProviderAdapter('codex'),
   cursor: cursorAdapter,
-  opencode: makeProviderAdapter('opencode'),
+  opencode: opencodeAdapter,
   openrouter: makeProviderAdapter('openrouter'),
   omp: ompAdapter,
   'local-model': makeProviderAdapter('local-model'),
@@ -407,4 +463,4 @@ function get(providerName) {
   return a;
 }
 
-module.exports = { session, adapters, get, omp, claudeCode, cursor, url, readUrl, writeUrl, hashContent };
+module.exports = { session, adapters, get, omp, claudeCode, cursor, opencode, url, readUrl, writeUrl, hashContent };

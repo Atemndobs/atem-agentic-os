@@ -114,6 +114,18 @@ function materializeSyntheticTask(syntheticId, paths, opts = {}) {
     }
     distilled = cr.distillSessionSync(composerId, { cwd: opts.cwd || '' });
     if (!distilled) throw new Error(`failed to distill cursor composer ${composerId}`);
+  } else if (parsed.provider === 'opencode') {
+    const oc = registry.opencode;
+    let sessionId = parsed.providerSessionId;
+    if (!oc.findSessionFileById(sessionId) && opts.cwd) {
+      const latest = oc.findLatestSessionForCwd(opts.cwd);
+      if (latest) sessionId = latest.id;
+    }
+    if (!oc.findSessionFileById(sessionId)) {
+      throw new Error(`opencode session not found for ${syntheticId}; pass --opencode-cwd`);
+    }
+    distilled = oc.distillSessionSync(sessionId, { cwd: opts.cwd || '' });
+    if (!distilled) throw new Error(`failed to distill opencode session ${sessionId}`);
   }
 
   const taskType = opts.taskType || inferTaskType(parsed.provider, distilled);
