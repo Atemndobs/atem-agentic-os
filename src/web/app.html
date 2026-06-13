@@ -231,7 +231,9 @@ body {
 .dash-item:hover { background: var(--accent-bg); }
 .dash-item .d-title { font-weight: 600; font-size: 14px; }
 .dash-item .d-sub { font-size: 12px; color: var(--muted); }
-.dash-item .d-when { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.dash-item .d-when { font-size: 12px; color: var(--muted); white-space: nowrap; text-align: right; }
+.dash-item .d-abs { display: block; font-size: 11px; opacity: .8; margin-top: 1px; }
+.doc-meta .rel { opacity: .75; }
 </style>
 </head>
 <body>
@@ -300,6 +302,13 @@ function ago(ms) {
   if (s < 3600) return Math.floor(s / 60) + 'm ago';
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
+}
+// Absolute "Jun 13, 2026, 2:04 PM" for the exact last-updated moment.
+function when(ms) {
+  if (!ms) return '';
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
 }
 function dirname(p) { return p.slice(0, p.lastIndexOf('/')); }
 function resolvePath(base, rel) {
@@ -634,7 +643,7 @@ async function showDoc(id) {
     ? `<div id="raw-view">${esc(doc.raw)}</div>`
     : `${fmCard(doc.frontmatter)}<div id="doc-body">${doc.html}</div>`;
   $content.innerHTML = `
-    <div class="doc-meta">${esc(where)} / <b>${esc(doc.file)}</b> · updated ${ago(doc.mtime)}
+    <div class="doc-meta">${esc(where)} / <b>${esc(doc.file)}</b> · updated ${esc(when(doc.mtime))} <span class="rel">(${ago(doc.mtime)})</span>
       <button id="raw-toggle">${showRaw ? 'rendered' : 'raw'}</button>
     </div>
     ${body}`;
@@ -788,7 +797,7 @@ function dashItem(d) {
   return `<a class="dash-item${d.status ? ' st-' + d.status : ''}" href="#/doc/${d.id}">
     <div><div class="d-title">${dot}${esc(d.title)}</div>
     <div class="d-sub">${esc(nodePathLabel(d.nodeKey))} · ${esc(d.file)}</div></div>
-    <div class="d-when">${ago(d.mtime)}</div>
+    <div class="d-when">${ago(d.mtime)}<span class="d-abs">${esc(when(d.mtime))}</span></div>
   </a>`;
 }
 function showDashboard() {
