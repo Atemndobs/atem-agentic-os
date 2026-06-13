@@ -35,34 +35,43 @@ function isDir(p) {
 // Claude Code's ~/.claude/projects entries encode absolute paths with
 // dashes standing in for '/' (and, in older encodings, '.'). Literal
 // dashes in directory names are kept as-is, which makes decoding
-// ambiguous — so we DFS over the three readings of each dash and prune
-// with filesystem existence checks. Undecodable names return null.
-function decodeClaudeProjectDir(encoded, exists = fs.existsSync) {
-  if (!encoded.startsWith('-')) return null;
-  const s = encoded.slice(1);
+// ambiguous. Instead of guessing per character (3^n blowup on
+// undecodable names), match the remainder against the actual entries of
+// each directory level: a dash in the encoded name may stand for the
+// entry's '-', '.', or the component boundary. Undecodable → null.
+function defaultListDir(p) {
+  try { return fs.readdirSync(p); } catch { return null; }
+}
 
-  function dfs(i, parent, pending) {
-    if (i === s.length) {
-      if (!pending) return null;
-      const full = `${parent}/${pending}`;
-      return exists(full) ? full : null;
+function decodeClaudeProjectDir(encoded, listDir = defaultListDir) {
+  if (!encoded.startsWith('-')) return null;
+
+  // Does `rem` start with this entry name (under dash-substitution rules),
+  // ending exactly or at a '-' boundary?
+  function componentMatch(rem, name) {
+    if (name.length > rem.length) return false;
+    for (let i = 0; i < name.length; i++) {
+      if (rem[i] === name[i]) continue;
+      if (rem[i] === '-' && (name[i] === '.' || name[i] === '-')) continue;
+      return false;
     }
-    const ch = s[i];
-    if (ch !== '-') return dfs(i + 1, parent, pending + ch);
-    // dash: try '/' (component boundary), literal '-', then '.' (old encoding)
-    if (pending) {
-      const full = `${parent}/${pending}`;
-      if (exists(full)) {
-        const r = dfs(i + 1, full, '');
-        if (r) return r;
-      }
-    }
-    const literal = dfs(i + 1, parent, pending + '-');
-    if (literal) return literal;
-    return dfs(i + 1, parent, pending + '.');
+    return rem.length === name.length || rem[name.length] === '-';
   }
 
-  return dfs(0, '', '');
+  function walk(parent, rem) {
+    if (rem === '') return parent;
+    const entries = listDir(parent === '' ? '/' : parent);
+    if (!entries) return null;
+    for (const name of entries) {
+      if (!componentMatch(rem, name)) continue;
+      const rest = rem.slice(name.length); // '' or '-…'
+      const r = walk(`${parent}/${name}`, rest.startsWith('-') ? rest.slice(1) : rest);
+      if (r) return r;
+    }
+    return null;
+  }
+
+  return walk('', encoded.slice(1));
 }
 
 // Codex records the working directory in the session_meta first line of
@@ -124,8 +133,13 @@ function discoverRoots(opts = {}) {
 
   const candidates = [];
   if (isDir(claudeProjectsDir)) {
+    const cache = new Map();
+    const cachedListDir = (p) => {
+      if (!cache.has(p)) cache.set(p, defaultListDir(p));
+      return cache.get(p);
+    };
     for (const name of fs.readdirSync(claudeProjectsDir)) {
-      const decoded = decodeClaudeProjectDir(name);
+      const decoded = decodeClaudeProjectDir(name, cachedListDir);
       if (decoded) candidates.push(decoded);
     }
   }

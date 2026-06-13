@@ -62,17 +62,37 @@ function opts(fx, extra = {}) {
   };
 }
 
-test('decodeClaudeProjectDir resolves dashes via existence checks', () => {
-  const known = new Set(['/Users', '/Users/x', '/Users/x/my-app', '/Users/x/my-app/.claude',
-    '/Users/x/my-app/.claude/worktrees', '/Users/x/my-app/.claude/worktrees/wt-1']);
-  const exists = (p) => known.has(p);
-  assert.equal(decodeClaudeProjectDir('-Users-x-my-app', exists), '/Users/x/my-app');
+test('decodeClaudeProjectDir resolves dashes via directory listings', () => {
+  const dirs = {
+    '/': ['Users', 'private'],
+    '/Users': ['x'],
+    '/Users/x': ['my-app', 'my'],
+    '/Users/x/my-app': ['.claude'],
+    '/Users/x/my': ['app'],
+    '/Users/x/my-app/.claude': ['worktrees'],
+    '/Users/x/my-app/.claude/worktrees': ['wt-1'],
+  };
+  const listDir = (p) => dirs[p] || null;
+  assert.equal(decodeClaudeProjectDir('-Users-x-my-app', listDir), '/Users/x/my-app');
+  // '--' encodes '/.': old-style dot-dir encoding
   assert.equal(
-    decodeClaudeProjectDir('-Users-x-my-app--claude-worktrees-wt-1', exists),
+    decodeClaudeProjectDir('-Users-x-my-app--claude-worktrees-wt-1', listDir),
     '/Users/x/my-app/.claude/worktrees/wt-1'
   );
-  assert.equal(decodeClaudeProjectDir('-No-such-path', exists), null);
-  assert.equal(decodeClaudeProjectDir('not-encoded', exists), null);
+  // ambiguity: '/Users/x/my/app' also exists; either reading is acceptable,
+  // but a result must be returned and must be a real path
+  const ambiguous = decodeClaudeProjectDir('-Users-x-my-app', listDir);
+  assert.ok(['/Users/x/my-app', '/Users/x/my/app'].includes(ambiguous));
+  assert.equal(decodeClaudeProjectDir('-No-such-path', listDir), null);
+  assert.equal(decodeClaudeProjectDir('not-encoded', listDir), null);
+});
+
+test('decodeClaudeProjectDir is fast on undecodable many-dash names', () => {
+  const listDir = (p) => (p === '/' ? ['nothing'] : null);
+  const start = Date.now();
+  const name = '-a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-q-r-s-t-u-v-w-x-y-z';
+  assert.equal(decodeClaudeProjectDir(name, listDir), null);
+  assert.ok(Date.now() - start < 100, 'must fail fast, not explore 3^n states');
 });
 
 test('buildTree lists tasks excluding _archive and current', () => {
