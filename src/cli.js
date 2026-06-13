@@ -1316,10 +1316,23 @@ function commandWeb(gitRoot, args) {
     const url = `http://127.0.0.1:${actualPort}`;
     console.log(`${ICONS.ok} ATEM planning viewer: ${url}`);
     console.log('  Press Ctrl+C to stop.');
-    if (open && process.platform === 'darwin') {
-      spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
-    }
+    if (open) openInBrowser(url);
   });
+}
+
+// Open a URL in the default browser, cross-platform (macOS, Windows, Linux).
+function openInBrowser(url, { platform = process.platform, spawnFn = spawn } = {}) {
+  let bin;
+  let cmdArgs;
+  if (platform === 'darwin') { bin = 'open'; cmdArgs = [url]; }
+  else if (platform === 'win32') { bin = 'cmd'; cmdArgs = ['/c', 'start', '""', url]; }
+  else { bin = 'xdg-open'; cmdArgs = [url]; }
+  try {
+    spawnFn(bin, cmdArgs, { stdio: 'ignore', detached: true }).unref();
+    return true;
+  } catch {
+    return false; // browser launch is best-effort; the URL is already printed
+  }
 }
 
 function commandGoals(gitRoot, args = []) {
@@ -4985,4 +4998,5 @@ module.exports = {
   removeDuplicateSectionBlocks,
   sectionCount,
   ensureDir,
+  openInBrowser,
 };

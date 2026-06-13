@@ -1,6 +1,6 @@
 {
   "name": "atem-agentic-os",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Session handoff layer for AI coding agents — claude-code, codex, cursor, opencode, omp, and human sessions sharing one continuity contract.",
   "type": "commonjs",
@@ -19,6 +19,7 @@
     "dist",
     "docs/action-plan.md",
     "docs/url-scheme.md",
+    "docs/INSTALL.md",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"
