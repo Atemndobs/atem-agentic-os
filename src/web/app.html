@@ -2,9 +2,381 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ATEM Planning Viewer</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e5e7eb;
+  --sidebar-bg: #f8fafc; --accent: #2563eb; --accent-bg: #eff6ff;
+  --code-bg: #f3f4f6; --card-bg: #f9fafb; --badge-bg: #e0e7ff; --badge-fg: #3730a3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115; --fg: #e5e7eb; --muted: #9ca3af; --border: #272b33;
+    --sidebar-bg: #151821; --accent: #60a5fa; --accent-bg: #1e2a45;
+    --code-bg: #1b1f29; --card-bg: #161a23; --badge-bg: #2b3354; --badge-fg: #b3c2f7;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+#atem-web-app { display: flex; height: 100vh; }
+
+/* ── Sidebar ─────────────────────────────────────────── */
+#sidebar {
+  width: 320px; min-width: 320px; border-right: 1px solid var(--border);
+  background: var(--sidebar-bg); overflow-y: auto; padding: 12px;
+}
+#sidebar h1 { font-size: 14px; margin: 4px 4px 12px; letter-spacing: .04em; }
+#sidebar h1 a { color: var(--fg); text-decoration: none; }
+#sidebar h1 .dot { color: var(--accent); }
+#search {
+  width: 100%; padding: 7px 10px; margin-bottom: 12px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px;
+}
+.group-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin: 14px 4px 6px; cursor: pointer; user-select: none;
+}
+.node { margin: 2px 0; }
+.node-label {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px;
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.node-label:hover { background: var(--accent-bg); }
+.node-label .chev { color: var(--muted); font-size: 10px; width: 10px; }
+.badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: var(--badge-bg); color: var(--badge-fg); font-weight: 600;
+}
+.doc-link {
+  display: block; padding: 3px 6px 3px 26px; border-radius: 6px;
+  color: var(--fg); text-decoration: none; font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.doc-link:hover { background: var(--accent-bg); }
+.doc-link.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.result { display: block; padding: 6px; border-radius: 6px; text-decoration: none; color: var(--fg); }
+.result:hover { background: var(--accent-bg); }
+.result .r-title { font-size: 13px; font-weight: 600; }
+.result .r-snippet { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Content ─────────────────────────────────────────── */
+#main { flex: 1; overflow-y: auto; display: flex; }
+#content { flex: 1; max-width: 860px; padding: 28px 40px 80px; }
+#toc {
+  width: 220px; padding: 28px 16px; font-size: 12px; position: sticky; top: 0;
+  align-self: flex-start; max-height: 100vh; overflow-y: auto;
+}
+#toc a { display: block; color: var(--muted); text-decoration: none; padding: 2px 0; }
+#toc a:hover { color: var(--accent); }
+#toc .t2 { padding-left: 12px; }
+#toc .t3 { padding-left: 24px; }
+.doc-meta { font-size: 12px; color: var(--muted); margin-bottom: 6px; word-break: break-all; }
+.doc-meta button {
+  font: inherit; font-size: 11px; margin-left: 8px; cursor: pointer;
+  background: var(--card-bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 8px;
+}
+.fm-card {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; margin: 12px 0; font-size: 13px;
+}
+.fm-card table { border-collapse: collapse; }
+.fm-card td { padding: 2px 14px 2px 0; border: none; }
+.fm-card td.k { color: var(--muted); }
+.empty, .error-card {
+  margin-top: 60px; text-align: center; color: var(--muted);
+}
+.error-card { color: #dc2626; }
+
+/* ── Rendered markdown ───────────────────────────────── */
+#doc-body h1, #doc-body h2, #doc-body h3 { line-height: 1.3; }
+#doc-body h1 { font-size: 26px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+#doc-body h2 { font-size: 20px; margin-top: 32px; }
+#doc-body h3 { font-size: 16px; margin-top: 24px; }
+#doc-body pre {
+  background: var(--code-bg); padding: 12px 14px; border-radius: 8px;
+  overflow-x: auto; font-size: 13px; line-height: 1.5;
+}
+#doc-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+#doc-body p code, #doc-body li code, #doc-body td code {
+  background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+}
+#doc-body table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+#doc-body th, #doc-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+#doc-body th { background: var(--card-bg); }
+#doc-body blockquote {
+  margin: 12px 0; padding: 4px 16px; border-left: 3px solid var(--accent);
+  color: var(--muted); background: var(--card-bg); border-radius: 0 8px 8px 0;
+}
+#doc-body a { color: var(--accent); }
+#doc-body img { max-width: 100%; }
+#doc-body hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+#raw-view {
+  background: var(--code-bg); padding: 14px; border-radius: 8px;
+  white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+}
+
+/* ── Dashboard ───────────────────────────────────────── */
+.dash-item {
+  display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; margin: 8px 0;
+  text-decoration: none; color: var(--fg);
+}
+.dash-item:hover { background: var(--accent-bg); }
+.dash-item .d-title { font-weight: 600; font-size: 14px; }
+.dash-item .d-sub { font-size: 12px; color: var(--muted); }
+.dash-item .d-when { font-size: 12px; color: var(--muted); white-space: nowrap; }
+</style>
 </head>
 <body>
-<div id="atem-web-app">placeholder — SPA lands in Task 4</div>
+<div id="atem-web-app">
+  <nav id="sidebar">
+    <h1><a href="#/">ATEM<span class="dot">·</span>plans</a></h1>
+    <input id="search" type="search" placeholder="Search planning docs…" autocomplete="off">
+    <div id="nav"></div>
+  </nav>
+  <div id="main">
+    <div id="content"></div>
+    <div id="toc"></div>
+  </div>
+</div>
+<script>
+'use strict';
+let tree = { generation: 0, docs: [], groups: [] };
+let openDoc = null; // last /api/doc response
+const collapsed = new Set(JSON.parse(localStorage.getItem('atem-web-collapsed') || '[]'));
+
+const $nav = document.getElementById('nav');
+const $content = document.getElementById('content');
+const $toc = document.getElementById('toc');
+const $search = document.getElementById('search');
+
+/* ── helpers ─────────────────────────────────────────── */
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function ago(ms) {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+function dirname(p) { return p.slice(0, p.lastIndexOf('/')); }
+function resolvePath(base, rel) {
+  const parts = (dirname(base) + '/' + rel).split('/');
+  const out = [];
+  for (const part of parts) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') out.pop();
+    else out.push(part);
+  }
+  return '/' + out.join('/');
+}
+function saveCollapsed() {
+  localStorage.setItem('atem-web-collapsed', JSON.stringify([...collapsed]));
+}
+function currentDocId() {
+  const m = location.hash.match(/^#\/doc\/(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+/* ── sidebar tree ────────────────────────────────────── */
+function renderNav() {
+  const active = currentDocId();
+  let html = '';
+  for (const group of tree.groups) {
+    const gKey = 'group:' + group.kind;
+    const gOpen = !collapsed.has(gKey);
+    const title = group.kind === 'tasks' ? 'Tasks' : 'Projects';
+    html += `<div class="group-title" data-toggle="${gKey}">${gOpen ? '▾' : '▸'} ${title} (${group.nodes.length})</div>`;
+    if (!gOpen) continue;
+    for (const node of group.nodes) {
+      const open = !collapsed.has(node.key);
+      const badge = node.provider ? `<span class="badge">${esc(node.provider)}</span>` : '';
+      html += `<div class="node">
+        <div class="node-label" data-toggle="${esc(node.key)}" title="${esc(node.root || node.label)}">
+          <span class="chev">${open ? '▾' : '▸'}</span>${esc(node.label)} ${badge}
+        </div>`;
+      if (open) {
+        for (const id of node.docs) {
+          const d = tree.docs[id];
+          html += `<a class="doc-link${id === active ? ' active' : ''}" href="#/doc/${id}" title="${esc(d.file)}">${esc(d.file)}</a>`;
+        }
+      }
+      html += '</div>';
+    }
+  }
+  $nav.innerHTML = html;
+  for (const el of $nav.querySelectorAll('[data-toggle]')) {
+    el.addEventListener('click', () => {
+      const key = el.getAttribute('data-toggle');
+      collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+      saveCollapsed();
+      renderNav();
+    });
+  }
+}
+
+/* ── search ──────────────────────────────────────────── */
+let searchTimer = null;
+$search.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = $search.value.trim();
+  if (!q) { renderNav(); return; }
+  searchTimer = setTimeout(async () => {
+    const out = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+    let html = '';
+    for (const r of out.results) {
+      html += `<a class="result" href="#/doc/${r.id}">
+        <div class="r-title">${esc(r.title)} <span style="color:var(--muted);font-weight:400">· ${esc(r.file)}</span></div>
+        <div class="r-snippet">${esc(r.snippet)}</div></a>`;
+    }
+    $nav.innerHTML = html || '<div class="group-title">No matches</div>';
+  }, 150);
+});
+
+/* ── document view ───────────────────────────────────── */
+function nodeOf(doc) {
+  for (const g of tree.groups) {
+    const n = g.nodes.find((n) => n.key === doc.key || n.key === doc.nodeKey);
+    if (n) return n;
+  }
+  return null;
+}
+
+function renderToc() {
+  const heads = [...$content.querySelectorAll('#doc-body h1, #doc-body h2, #doc-body h3')];
+  if (heads.length < 3) { $toc.innerHTML = ''; return; }
+  $toc.innerHTML = heads.map((h) =>
+    `<a class="t${h.tagName[1]}" href="#${h.id}" data-scroll="${h.id}">${esc(h.textContent)}</a>`).join('');
+  for (const a of $toc.querySelectorAll('[data-scroll]')) {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const el = document.getElementById(a.getAttribute('data-scroll'));
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+}
+
+function rewriteLinks(doc) {
+  const byPath = new Map(tree.docs.map((d) => [d.path, d.id]));
+  for (const a of $content.querySelectorAll('#doc-body a')) {
+    const href = a.getAttribute('href') || '';
+    if (/^https?:/i.test(href)) {
+      a.target = '_blank'; a.rel = 'noopener';
+    } else if (href.endsWith('.md') && !href.startsWith('#')) {
+      const target = byPath.get(resolvePath(doc.path, href));
+      if (target !== undefined) a.setAttribute('href', '#/doc/' + target);
+      else a.removeAttribute('href');
+    }
+  }
+}
+
+function fmCard(fm) {
+  const keys = Object.keys(fm || {});
+  if (!keys.length) return '';
+  const rows = keys.map((k) => `<tr><td class="k">${esc(k)}</td><td>${esc(fm[k])}</td></tr>`).join('');
+  return `<div class="fm-card"><table>${rows}</table></div>`;
+}
+
+let showRaw = false;
+async function showDoc(id) {
+  const res = await fetch('/api/doc?id=' + id);
+  if (!res.ok) {
+    $content.innerHTML = '<div class="error-card">Document not found — it may have been removed.</div>';
+    $toc.innerHTML = '';
+    openDoc = null;
+    return;
+  }
+  const doc = await res.json();
+  openDoc = doc;
+  const node = nodeOf(doc);
+  const where = node ? (node.root || node.label) : '';
+  const body = showRaw
+    ? `<div id="raw-view">${esc(doc.raw)}</div>`
+    : `${fmCard(doc.frontmatter)}<div id="doc-body">${doc.html}</div>`;
+  $content.innerHTML = `
+    <div class="doc-meta">${esc(where)} / <b>${esc(doc.file)}</b> · updated ${ago(doc.mtime)}
+      <button id="raw-toggle">${showRaw ? 'rendered' : 'raw'}</button>
+    </div>
+    ${body}`;
+  document.getElementById('raw-toggle').addEventListener('click', () => {
+    showRaw = !showRaw;
+    showDoc(id);
+  });
+  if (!showRaw) { rewriteLinks(doc); renderToc(); } else { $toc.innerHTML = ''; }
+  renderNav();
+}
+
+/* ── dashboard ───────────────────────────────────────── */
+function showDashboard() {
+  openDoc = null;
+  const recent = [...tree.docs].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
+  const nodeLabel = (d) => {
+    for (const g of tree.groups) {
+      const n = g.nodes.find((n) => n.key === d.nodeKey);
+      if (n) return n.label + (n.provider ? ` (${n.provider})` : '');
+    }
+    return '';
+  };
+  const items = recent.map((d) => `
+    <a class="dash-item" href="#/doc/${d.id}">
+      <div><div class="d-title">${esc(d.title)}</div>
+      <div class="d-sub">${esc(nodeLabel(d))} · ${esc(d.file)}</div></div>
+      <div class="d-when">${ago(d.mtime)}</div>
+    </a>`).join('');
+  $content.innerHTML = `<h2>Recently updated</h2>${items || '<div class="empty">No planning documents found yet.</div>'}`;
+  $toc.innerHTML = '';
+  renderNav();
+}
+
+/* ── routing ─────────────────────────────────────────── */
+function route() {
+  const id = currentDocId();
+  if (id !== null && tree.docs[id]) showDoc(id);
+  else if (id !== null) showDoc(id); // let the 404 produce the error card
+  else showDashboard();
+}
+window.addEventListener('hashchange', route);
+
+/* ── live reload ─────────────────────────────────────── */
+async function refreshTree() {
+  const prevOpen = openDoc;
+  tree = await (await fetch('/api/tree')).json();
+  const id = currentDocId();
+  if (id === null) { showDashboard(); return; }
+  // Re-resolve the open doc by nodeKey + file: ids can shift across rescans.
+  if (prevOpen) {
+    const match = tree.docs.find((d) => d.nodeKey === prevOpen.key && d.file === prevOpen.file);
+    if (match && match.id !== id) { location.hash = '#/doc/' + match.id; return; }
+    if (!match) {
+      $content.innerHTML = '<div class="error-card">This document was removed.</div>';
+      renderNav();
+      return;
+    }
+  }
+  showDoc(id);
+}
+const es = new EventSource('/events');
+es.addEventListener('message', (e) => {
+  try {
+    const data = JSON.parse(e.data);
+    if (data.type === 'change') refreshTree();
+  } catch { /* ignore */ }
+});
+
+/* ── boot ────────────────────────────────────────────── */
+(async function boot() {
+  tree = await (await fetch('/api/tree')).json();
+  route();
+})();
+</script>
 </body>
 </html>

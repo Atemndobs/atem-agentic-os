@@ -43,6 +43,18 @@ test('GET / serves the SPA shell', async (t) => {
   assert.match(await res.text(), /atem-web-app/);
 });
 
+test('SPA shell contains router, SSE, search, and persistence wiring', async (t) => {
+  const fx = makeFixture();
+  const { app, base } = await startApp(fx);
+  t.after(() => app.close());
+  const html = await (await fetch(base + '/')).text();
+  assert.match(html, /#\/doc\//, 'hash router');
+  assert.match(html, /EventSource\(['"]\/events['"]\)/, 'live reload');
+  assert.match(html, /localStorage/, 'collapse persistence');
+  assert.match(html, /id="search"/, 'search input');
+  assert.match(html, /prefers-color-scheme/, 'theme support');
+});
+
 test('GET /api/tree returns groups + generation', async (t) => {
   const fx = makeFixture();
   const { app, base } = await startApp(fx);
