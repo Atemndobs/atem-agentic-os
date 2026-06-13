@@ -104,6 +104,23 @@ body {
 /* legend */
 .legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 0 4px 12px; font-size: 11px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 4px; }
+/* settings */
+#settings { margin: 0 4px 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.settings-toggle {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer;
+  font-size: 12px; color: var(--muted); user-select: none; background: var(--card-bg);
+}
+.settings-toggle:hover { color: var(--fg); }
+.settings-toggle .chev { font-size: 10px; }
+.settings-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.settings-body label { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.settings-body label.cfg-field { flex-direction: column; align-items: stretch; gap: 3px; cursor: default; color: var(--muted); }
+.settings-body .hint { font-size: 10px; opacity: .7; }
+.settings-body textarea {
+  width: 100%; resize: vertical; min-height: 26px; font: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px;
+  background: var(--bg); color: var(--fg);
+}
 .result { display: block; padding: 6px; border-radius: 6px; text-decoration: none; color: var(--fg); }
 .result:hover { background: var(--accent-bg); }
 .result .r-title { font-size: 13px; font-weight: 600; }
@@ -189,6 +206,22 @@ body {
       <span><span class="dot main">●</span> main plan</span>
       <span><span class="dot done">●</span> executed</span>
     </div>
+    <div id="settings">
+      <div class="settings-toggle" id="settings-toggle"><span class="chev">▸</span>⚙ Settings</div>
+      <div class="settings-body" id="settings-body" hidden>
+        <label><input type="checkbox" data-cfg="showTasks"> Tasks</label>
+        <label><input type="checkbox" data-cfg="showWorktrees"> Worktrees</label>
+        <label><input type="checkbox" data-cfg="showClaudeMemory"> Claude memory</label>
+        <label><input type="checkbox" data-cfg="showExecuted"> Executed plans</label>
+        <label><input type="checkbox" data-cfg="showUncategorized"> Other docs</label>
+        <label class="cfg-field">Hide folders <span class="hint">(comma-separated)</span>
+          <textarea data-cfg="hideFolders" rows="1" placeholder="research, archive"></textarea></label>
+        <label class="cfg-field">Hide files
+          <textarea data-cfg="hideFiles" rows="1" placeholder="CHANGELOG, .test."></textarea></label>
+        <label class="cfg-field">Hide projects
+          <textarea data-cfg="hideProjects" rows="1" placeholder="old-thing"></textarea></label>
+      </div>
+    </div>
     <div id="nav"></div>
   </nav>
   <div id="main">
@@ -203,6 +236,15 @@ let openDoc = null; // last /api/doc response
 // Which tree nodes are expanded. Seeded with the two groups on first run
 // so the sidebar opens as a scannable list of repos/tasks (all collapsed).
 const open = new Set(JSON.parse(localStorage.getItem('atem-web-open') || 'null') || ['group:tasks', 'group:projects']);
+
+// Show/hide config. Server (~/.atem/web-config.json) is the durable source;
+// localStorage mirrors it for an instant first paint before the fetch lands.
+const CONFIG_DEFAULTS = {
+  showTasks: true, showWorktrees: true, showClaudeMemory: true,
+  showExecuted: true, showUncategorized: true,
+  hideFolders: [], hideFiles: [], hideProjects: [],
+};
+let config = { ...CONFIG_DEFAULTS, ...(JSON.parse(localStorage.getItem('atem-web-config') || '{}')) };
 
 const $nav = document.getElementById('nav');
 const $content = document.getElementById('content');
@@ -237,6 +279,40 @@ function saveOpen() {
 function currentDocId() {
   const m = location.hash.match(/^#\/doc\/(\d+)$/);
   return m ? Number(m[1]) : null;
+}
+
+/* ── view filtering (config-driven) ──────────────────── */
+function matchesAny(list, value) {
+  const v = value.toLowerCase();
+  return list.some((p) => p && v.includes(p.toLowerCase()));
+}
+function docVisible(d) {
+  if (!d) return false;
+  if (!config.showClaudeMemory && d.file.startsWith('‹claude memory›')) return false;
+  if (!config.showExecuted && d.status === 'done') return false;
+  if (!config.showUncategorized && !d.status) return false;
+  const segs = d.file.split('/');
+  const base = segs[segs.length - 1];
+  const folders = segs.slice(0, -1);
+  if (config.hideFolders.length && folders.some((f) => matchesAny(config.hideFolders, f))) return false;
+  if (config.hideFiles.length && matchesAny(config.hideFiles, base)) return false;
+  return true;
+}
+function visibleDocIds(node) {
+  return node.docs.filter((id) => docVisible(tree.docs[id]));
+}
+function nodeHasVisible(node) {
+  if (visibleDocIds(node).length) return true;
+  return (node.children || []).some((c) => childVisible(c));
+}
+function childVisible(child) {
+  if (!config.showWorktrees) return false;
+  if (matchesAny(config.hideProjects, child.label)) return false;
+  return nodeHasVisible(child);
+}
+function nodeVisible(node) {
+  if (matchesAny(config.hideProjects, node.label)) return false;
+  return nodeHasVisible(node);
 }
 
 /* ── sidebar tree ────────────────────────────────────── */
@@ -292,17 +368,20 @@ function renderFolder(folder, nodeKey, prefix, depth) {
 }
 
 function renderNode(node, depth) {
+  if (!nodeVisible(node)) return '';
   const isOpen = open.has(node.key);
   const pad = 6 + depth * 14;
   const badge = node.provider ? `<span class="badge">${esc(node.provider)}</span>` : '';
   const wt = node.kind === 'worktree' ? '<span class="badge wt">worktree</span>' : '';
-  const count = node.docs.length + (node.children ? node.children.reduce((s, c) => s + c.docs.length, 0) : 0);
+  const docIds = visibleDocIds(node);
+  const childDocs = (node.children || []).filter(childVisible).reduce((s, c) => s + visibleDocIds(c).length, 0);
+  const count = docIds.length + childDocs;
   let html = `<div class="node">
     <div class="node-label" data-toggle="${esc(node.key)}" style="padding-left:${pad}px" title="${esc(node.root || node.label)}">
       <span class="chev">${isOpen ? '▾' : '▸'}</span>${esc(node.label)} ${badge}${wt}<span class="count">${count}</span>
     </div>`;
   if (isOpen) {
-    html += renderFolder(buildFolderTree(node.docs), node.key, '', depth + 1);
+    html += renderFolder(buildFolderTree(docIds), node.key, '', depth + 1);
     for (const child of (node.children || [])) html += renderNode(child, depth + 1);
   }
   html += '</div>';
@@ -312,12 +391,14 @@ function renderNode(node, depth) {
 function renderNav() {
   let html = '';
   for (const group of tree.groups) {
+    if (group.kind === 'tasks' && !config.showTasks) continue;
     const gKey = 'group:' + group.kind;
     const gOpen = open.has(gKey);
     const title = group.kind === 'tasks' ? 'Tasks' : 'Projects';
-    html += `<div class="group-title" data-toggle="${gKey}">${gOpen ? '▾' : '▸'} ${title} (${group.nodes.length})</div>`;
+    const visible = group.nodes.filter(nodeVisible);
+    html += `<div class="group-title" data-toggle="${gKey}">${gOpen ? '▾' : '▸'} ${title} (${visible.length})</div>`;
     if (!gOpen) continue;
-    for (const node of group.nodes) html += renderNode(node, 0);
+    for (const node of visible) html += renderNode(node, 0);
   }
   $nav.innerHTML = html;
   for (const el of $nav.querySelectorAll('[data-toggle]')) {
@@ -339,7 +420,7 @@ $search.addEventListener('input', () => {
   searchTimer = setTimeout(async () => {
     const out = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
     let html = '';
-    for (const r of out.results) {
+    for (const r of out.results.filter((r) => docVisible(tree.docs[r.id]))) {
       html += `<a class="result" href="#/doc/${r.id}">
         <div class="r-title">${esc(r.title)} <span style="color:var(--muted);font-weight:400">· ${esc(r.file)}</span></div>
         <div class="r-snippet">${esc(r.snippet)}</div></a>`;
@@ -473,8 +554,8 @@ function dashItem(d) {
 }
 function showDashboard() {
   openDoc = null;
-  const active = tree.docs.filter((d) => d.status === 'active').sort((a, b) => b.mtime - a.mtime).slice(0, 12);
-  const recent = [...tree.docs].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
+  const active = tree.docs.filter((d) => d.status === 'active' && docVisible(d)).sort((a, b) => b.mtime - a.mtime).slice(0, 12);
+  const recent = tree.docs.filter(docVisible).sort((a, b) => b.mtime - a.mtime).slice(0, 20);
   const activeBlock = active.length
     ? `<h2><span class="dot active">●</span> Active plans</h2>${active.map(dashItem).join('')}`
     : '';
@@ -525,9 +606,61 @@ es.addEventListener('message', (e) => {
   } catch { /* ignore */ }
 });
 
+/* ── settings panel ──────────────────────────────────── */
+const $settings = document.getElementById('settings-body');
+const settingsOpen = localStorage.getItem('atem-web-settings-open') === '1';
+if (settingsOpen) { $settings.hidden = false; document.querySelector('#settings-toggle .chev').textContent = '▾'; }
+document.getElementById('settings-toggle').addEventListener('click', () => {
+  const nowOpen = $settings.hidden;
+  $settings.hidden = !nowOpen;
+  document.querySelector('#settings-toggle .chev').textContent = nowOpen ? '▾' : '▸';
+  localStorage.setItem('atem-web-settings-open', nowOpen ? '1' : '0');
+});
+
+function syncSettingsInputs() {
+  for (const el of $settings.querySelectorAll('[data-cfg]')) {
+    const k = el.getAttribute('data-cfg');
+    if (el.type === 'checkbox') el.checked = !!config[k];
+    else el.value = (config[k] || []).join(', ');
+  }
+}
+let saveTimer = null;
+function persistConfig() {
+  localStorage.setItem('atem-web-config', JSON.stringify(config));
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fetch('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }).then((r) => r.json()).then((saved) => { config = saved; }).catch(() => {});
+  }, 400);
+}
+function rerender() {
+  renderNav();
+  if (currentDocId() === null) showDashboard();
+}
+for (const el of $settings.querySelectorAll('[data-cfg]')) {
+  const k = el.getAttribute('data-cfg');
+  const evt = el.type === 'checkbox' ? 'change' : 'input';
+  el.addEventListener(evt, () => {
+    if (el.type === 'checkbox') config[k] = el.checked;
+    else config[k] = el.value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+    persistConfig();
+    rerender();
+  });
+}
+
 /* ── boot ────────────────────────────────────────────── */
 (async function boot() {
-  tree = await (await fetch('/api/tree')).json();
+  syncSettingsInputs(); // paint from localStorage mirror first
+  const [treeRes, cfgRes] = await Promise.all([
+    fetch('/api/tree').then((r) => r.json()),
+    fetch('/api/config').then((r) => r.json()).catch(() => config),
+  ]);
+  tree = treeRes;
+  config = { ...CONFIG_DEFAULTS, ...cfgRes };
+  localStorage.setItem('atem-web-config', JSON.stringify(config));
+  syncSettingsInputs();
   route();
 })();
 </script>
