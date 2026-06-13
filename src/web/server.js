@@ -14,6 +14,17 @@ const config = require('./config.js');
 
 const APP_HTML = fs.readFileSync(path.join(__dirname, 'app.html'));
 
+// Vendored Mermaid (for rendering diagrams) — read lazily so startup stays
+// light when no diagram is ever opened.
+let MERMAID_JS = null;
+function getMermaid() {
+  if (MERMAID_JS === null) {
+    try { MERMAID_JS = fs.readFileSync(path.join(__dirname, 'vendor', 'mermaid.min.js')); }
+    catch { MERMAID_JS = Buffer.from('/* mermaid bundle missing */'); }
+  }
+  return MERMAID_JS;
+}
+
 const DEBOUNCE_MS = 200;
 const SEARCH_MAX_TOTAL = 50;
 const SEARCH_MAX_PER_DOC = 5;
@@ -165,6 +176,9 @@ function createServer(opts = {}) {
           case '/':
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             return res.end(APP_HTML);
+          case '/vendor/mermaid.min.js':
+            res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'max-age=86400' });
+            return res.end(getMermaid());
           case '/api/tree':
             return json(res, 200, state);
           case '/api/doc':

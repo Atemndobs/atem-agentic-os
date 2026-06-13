@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.2 — 2026-06-13
+
+- `atem web`: renders ```mermaid code blocks as actual **diagrams** (sequence,
+  flowchart, etc.) instead of raw text. Each diagram has a `source` toggle and
+  a Copy button; if a diagram fails to parse it falls back to showing the
+  source. Mermaid is **vendored locally** (`src/web/vendor/mermaid.min.js`,
+  served from `127.0.0.1`) so rendering works offline and no third-party code
+  runs in a page that displays your private plans.
+
 ## v0.2.1 — 2026-06-13
 
 Windows hardening for team installs:
