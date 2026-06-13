@@ -26,8 +26,27 @@ body {
 
 /* ── Sidebar ─────────────────────────────────────────── */
 #sidebar {
-  width: 320px; min-width: 320px; border-right: 1px solid var(--border);
+  width: clamp(180px, 30vw, 320px); flex-shrink: 0; border-right: 1px solid var(--border);
   background: var(--sidebar-bg); overflow-y: auto; padding: 12px;
+}
+@media (max-width: 640px) {
+  #toc { display: none; }
+  #content { padding: 20px 16px 60px; }
+}
+#menu-btn {
+  display: none; position: fixed; top: 10px; left: 10px; z-index: 10;
+  background: var(--sidebar-bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 10px; font: inherit; cursor: pointer;
+}
+@media (max-width: 520px) {
+  #menu-btn { display: block; }
+  #sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 9; width: 280px;
+    transform: translateX(-100%); transition: transform .15s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,.25);
+  }
+  #sidebar.open { transform: none; }
+  #content { padding-top: 52px; }
 }
 #sidebar h1 { font-size: 14px; margin: 4px 4px 12px; letter-spacing: .04em; }
 #sidebar h1 a { color: var(--fg); text-decoration: none; }
@@ -136,6 +155,7 @@ body {
 </head>
 <body>
 <div id="atem-web-app">
+  <button id="menu-btn" title="Toggle navigation">☰</button>
   <nav id="sidebar">
     <h1><a href="#/">ATEM<span class="dot">·</span>plans</a></h1>
     <input id="search" type="search" placeholder="Search planning docs…" autocomplete="off">
@@ -344,7 +364,13 @@ function route() {
   else if (id !== null) showDoc(id); // let the 404 produce the error card
   else showDashboard();
 }
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => {
+  document.getElementById('sidebar').classList.remove('open');
+  route();
+});
+document.getElementById('menu-btn').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('open');
+});
 
 /* ── live reload ─────────────────────────────────────── */
 async function refreshTree() {
