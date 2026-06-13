@@ -56,8 +56,10 @@ test('atem web serves the tree over http', async (t) => {
 
   const tree = await (await fetch(url + '/api/tree')).json();
   assert.ok(Array.isArray(tree.groups));
-  assert.equal(tree.groups[0].kind, 'tasks');
-  assert.ok(tree.groups[0].nodes.some((n) => n.label === 'TASK-001'));
+  assert.equal(tree.groups[0].kind, 'projects');
+  // the started task nests under its --repo project as a kind:task child
+  const taskChildren = tree.groups[0].nodes.flatMap((n) => (n.children || [])).filter((c) => c.kind === 'task');
+  assert.ok(taskChildren.some((c) => c.label === 'TASK-001'), 'TASK-001 nested under its project');
 
   const page = await (await fetch(url + '/')).text();
   assert.match(page, /atem-web-app/);

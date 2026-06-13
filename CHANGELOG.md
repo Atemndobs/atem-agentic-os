@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `atem web`: hand-off tasks now nest under the project they target
+  (resolved from the task's `repo`/`target_repo`/`cwd`), shown with a
+  "handoff" badge alongside that project's worktrees — there is no longer
+  a standalone Tasks group. Tasks that can't be tied to an existing
+  project are dropped, keeping everything contained within a project.
+  The Settings "Tasks" toggle is now "Handoff tasks".
 - `atem web`: interactive document reading — fenced **code blocks collapse**
   by default into a `lang · N lines` header with a Copy button (expand on
   click); **headings fold** their section (with Expand all / Collapse all);

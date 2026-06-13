@@ -75,6 +75,7 @@ body {
   background: var(--badge-bg); color: var(--badge-fg); font-weight: 600;
 }
 .badge.wt { background: var(--code-bg); color: var(--muted); }
+.badge.task { background: var(--st-main); color: #fff; }
 .node-label .count, .result .r-snippet .count {
   margin-left: auto; font-size: 10px; color: var(--muted); font-weight: 500; padding-left: 6px;
 }
@@ -244,7 +245,7 @@ body {
     <div id="settings">
       <div class="settings-toggle" id="settings-toggle"><span class="chev">▸</span>⚙ Settings</div>
       <div class="settings-body" id="settings-body" hidden>
-        <label><input type="checkbox" data-cfg="showTasks"> Tasks</label>
+        <label><input type="checkbox" data-cfg="showTasks"> Handoff tasks</label>
         <label><input type="checkbox" data-cfg="showWorktrees"> Worktrees</label>
         <label><input type="checkbox" data-cfg="showClaudeMemory"> Claude memory</label>
         <label><input type="checkbox" data-cfg="showExecuted"> Executed plans</label>
@@ -345,7 +346,8 @@ function nodeHasVisible(node) {
   return (node.children || []).some((c) => childVisible(c));
 }
 function childVisible(child) {
-  if (!config.showWorktrees) return false;
+  if (child.kind === 'task' && !config.showTasks) return false;
+  if (child.kind === 'worktree' && !config.showWorktrees) return false;
   if (matchesAny(config.hideProjects, child.label)) return false;
   return nodeHasVisible(child);
 }
@@ -411,17 +413,19 @@ function renderNode(node, depth) {
   const isOpen = open.has(node.key);
   const pad = 6 + depth * 14;
   const badge = node.provider ? `<span class="badge">${esc(node.provider)}</span>` : '';
-  const wt = node.kind === 'worktree' ? '<span class="badge wt">worktree</span>' : '';
+  const kindBadge = node.kind === 'worktree' ? '<span class="badge wt">worktree</span>'
+    : node.kind === 'task' ? '<span class="badge task">handoff</span>' : '';
   const docIds = visibleDocIds(node);
-  const childDocs = (node.children || []).filter(childVisible).reduce((s, c) => s + visibleDocIds(c).length, 0);
+  const visibleChildren = (node.children || []).filter(childVisible);
+  const childDocs = visibleChildren.reduce((s, c) => s + visibleDocIds(c).length, 0);
   const count = docIds.length + childDocs;
   let html = `<div class="node">
     <div class="node-label" data-toggle="${esc(node.key)}" style="padding-left:${pad}px" title="${esc(node.root || node.label)}">
-      <span class="chev">${isOpen ? '▾' : '▸'}</span>${esc(node.label)} ${badge}${wt}<span class="count">${count}</span>
+      <span class="chev">${isOpen ? '▾' : '▸'}</span>${esc(node.label)} ${badge}${kindBadge}<span class="count">${count}</span>
     </div>`;
   if (isOpen) {
     html += renderFolder(buildFolderTree(docIds), node.key, '', depth + 1);
-    for (const child of (node.children || [])) html += renderNode(child, depth + 1);
+    for (const child of visibleChildren) html += renderNode(child, depth + 1);
   }
   html += '</div>';
   return html;
