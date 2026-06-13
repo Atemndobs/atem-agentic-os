@@ -178,6 +178,40 @@ body {
 #doc-body a { color: var(--accent); }
 #doc-body img { max-width: 100%; }
 #doc-body hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+/* collapsible code blocks */
+.code-block { margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.code-head {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer;
+  background: var(--card-bg); font-size: 12px; color: var(--muted); user-select: none;
+}
+.code-head:hover { color: var(--fg); }
+.code-head .chev { font-size: 10px; width: 10px; }
+.code-head .lang { font-weight: 600; color: var(--fg); font-family: ui-monospace, Menlo, monospace; }
+.code-head .copy-btn {
+  margin-left: auto; font: inherit; font-size: 11px; cursor: pointer; padding: 1px 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg);
+}
+.code-block pre { margin: 0; border-radius: 0; border: none; }
+.code-block.collapsed pre { display: none; }
+/* foldable headings */
+#doc-body h1.foldable, #doc-body h2.foldable, #doc-body h3.foldable, #doc-body h4.foldable {
+  cursor: pointer; display: flex; align-items: center; gap: 6px;
+}
+#doc-body .hchev { font-size: .6em; color: var(--muted); flex: 0 0 auto; }
+#doc-body .hlink {
+  font-size: .65em; opacity: 0; text-decoration: none; color: var(--muted); transition: opacity .1s;
+}
+#doc-body .foldable:hover .hlink { opacity: 1; }
+#doc-body .hlink:hover { color: var(--accent); }
+/* doc toolbar + progress */
+.doc-tools { display: flex; gap: 10px; align-items: center; margin: 4px 0 14px; font-size: 12px; }
+.doc-tools button {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 2px 9px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--fg);
+}
+.progress { flex: 1; max-width: 280px; display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.progress .bar { flex: 1; height: 6px; border-radius: 999px; background: var(--code-bg); overflow: hidden; }
+.progress .bar i { display: block; height: 100%; background: var(--st-active); }
 #raw-view {
   background: var(--code-bg); padding: 14px; border-radius: 8px;
   white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
@@ -277,8 +311,12 @@ function saveOpen() {
   localStorage.setItem('atem-web-open', JSON.stringify([...open]));
 }
 function currentDocId() {
-  const m = location.hash.match(/^#\/doc\/(\d+)$/);
+  const m = location.hash.match(/^#\/doc\/(\d+)/);
   return m ? Number(m[1]) : null;
+}
+function currentSection() {
+  const m = location.hash.match(/^#\/doc\/\d+\/(.+)$/);
+  return m ? decodeURIComponent(m[1]) : null;
 }
 
 /* ── view filtering (config-driven) ──────────────────── */
@@ -539,8 +577,144 @@ async function showDoc(id) {
     showRaw = !showRaw;
     showDoc(id);
   });
-  if (!showRaw) { rewriteLinks(doc); renderToc(); } else { $toc.innerHTML = ''; }
+  if (!showRaw) {
+    rewriteLinks(doc);
+    renderToc();
+    enhanceDoc(id);
+    const section = currentSection();
+    if (section) {
+      const el = document.getElementById(section);
+      if (el) { unfoldTo(el); el.scrollIntoView(); }
+    }
+  } else { $toc.innerHTML = ''; }
   renderNav();
+}
+
+/* ── interactive document enhancements ───────────────── */
+function enhanceDoc(id) {
+  const body = $content.querySelector('#doc-body');
+  if (!body) return;
+  enhanceCodeBlocks(body);
+  enhanceHeadings(body, id);
+  addDocTools(body);
+}
+
+// Collapse fenced code into a header (lang · N lines) + Copy; expand on click.
+function enhanceCodeBlocks(body) {
+  for (const pre of [...body.querySelectorAll('pre')]) {
+    const code = pre.querySelector('code');
+    const langCls = code ? [...code.classList].find((c) => c.startsWith('lang-')) : '';
+    const lang = langCls ? langCls.slice(5) : 'code';
+    const text = code ? code.textContent.replace(/\n$/, '') : '';
+    const lines = text ? text.split('\n').length : 0;
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block collapsed';
+    pre.parentNode.insertBefore(wrap, pre);
+    const head = document.createElement('div');
+    head.className = 'code-head';
+    head.innerHTML = `<span class="chev">▸</span><span class="lang">${esc(lang)}</span>`
+      + `<span class="lines">· ${lines} line${lines === 1 ? '' : 's'}</span>`
+      + '<button class="copy-btn" type="button">Copy</button>';
+    wrap.appendChild(head);
+    wrap.appendChild(pre);
+    head.addEventListener('click', (e) => {
+      if (e.target.closest('.copy-btn')) return;
+      wrap.classList.toggle('collapsed');
+      head.querySelector('.chev').textContent = wrap.classList.contains('collapsed') ? '▸' : '▾';
+    });
+    head.querySelector('.copy-btn').addEventListener('click', async () => {
+      const btn = head.querySelector('.copy-btn');
+      try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied'; }
+      catch { btn.textContent = 'Failed'; }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+    });
+  }
+}
+
+// Headings fold their section; hovering reveals a deep-link icon.
+function siblingsUntilHeading(h, level) {
+  const out = [];
+  let el = h.nextElementSibling;
+  while (el && !(/^H[1-4]$/.test(el.tagName) && Number(el.tagName[1]) <= level)) {
+    out.push(el);
+    el = el.nextElementSibling;
+  }
+  return out;
+}
+function setHeadingFolded(h, folded) {
+  const level = Number(h.tagName[1]);
+  h.classList.toggle('folded', folded);
+  const chev = h.querySelector('.hchev');
+  if (chev) chev.textContent = folded ? '▸' : '▾';
+  for (const el of siblingsUntilHeading(h, level)) el.style.display = folded ? 'none' : '';
+}
+function enhanceHeadings(body, id) {
+  for (const h of [...body.querySelectorAll('h1, h2, h3, h4')]) {
+    if (!h.id) continue;
+    h.classList.add('foldable');
+    h.insertAdjacentHTML('afterbegin', '<span class="hchev">▾</span>');
+    h.insertAdjacentHTML('beforeend',
+      ` <a class="hlink" href="#/doc/${id}/${encodeURIComponent(h.id)}" title="Copy link to section">🔗</a>`);
+    h.querySelector('.hchev').addEventListener('click', (e) => {
+      e.stopPropagation();
+      setHeadingFolded(h, !h.classList.contains('folded'));
+    });
+    h.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
+      setHeadingFolded(h, !h.classList.contains('folded'));
+    });
+    h.querySelector('.hlink').addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const url = location.origin + location.pathname + `#/doc/${id}/${encodeURIComponent(h.id)}`;
+      const a = e.currentTarget;
+      navigator.clipboard.writeText(url).then(() => {
+        a.textContent = '✓'; setTimeout(() => { a.textContent = '🔗'; }, 1000);
+      }).catch(() => {});
+      location.hash = `#/doc/${id}/${encodeURIComponent(h.id)}`;
+    });
+  }
+}
+
+// Unfold any collapsed headings/code above a target element so it's visible.
+function unfoldTo(el) {
+  let cur = el;
+  while (cur && cur !== $content) {
+    if (cur.classList && cur.classList.contains('code-block')) {
+      cur.classList.remove('collapsed');
+      const c = cur.querySelector('.code-head .chev'); if (c) c.textContent = '▾';
+    }
+    cur = cur.parentElement;
+  }
+  // ensure the element isn't hidden by a folded heading
+  if (el.style.display === 'none') el.style.display = '';
+}
+
+// Top toolbar: expand/collapse all, and a checkbox progress bar for plans.
+function addDocTools(body) {
+  const codeBlocks = [...body.querySelectorAll('.code-block')];
+  const heads = [...body.querySelectorAll('.foldable')];
+  const boxes = [...body.querySelectorAll('input[type="checkbox"]')];
+  const tools = document.createElement('div');
+  tools.className = 'doc-tools';
+  if (boxes.length) {
+    const done = boxes.filter((b) => b.checked).length;
+    const pct = Math.round((done / boxes.length) * 100);
+    tools.innerHTML += `<span class="progress" title="${done} of ${boxes.length} tasks done">`
+      + `${done}/${boxes.length}<span class="bar"><i style="width:${pct}%"></i></span></span>`;
+  }
+  if (codeBlocks.length || heads.length) {
+    tools.innerHTML += '<button data-act="expand">Expand all</button><button data-act="collapse">Collapse all</button>';
+  }
+  if (!tools.children.length) return;
+  body.parentNode.insertBefore(tools, body);
+  tools.querySelectorAll('button').forEach((btn) => btn.addEventListener('click', () => {
+    const collapse = btn.getAttribute('data-act') === 'collapse';
+    for (const cb of codeBlocks) {
+      cb.classList.toggle('collapsed', collapse);
+      const c = cb.querySelector('.code-head .chev'); if (c) c.textContent = collapse ? '▸' : '▾';
+    }
+    for (const h of heads) setHeadingFolded(h, collapse);
+  }));
 }
 
 /* ── dashboard ───────────────────────────────────────── */
