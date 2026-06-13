@@ -198,6 +198,23 @@ body {
 }
 .code-block pre { margin: 0; border-radius: 0; border: none; }
 .code-block.collapsed pre { display: none; }
+/* mermaid diagrams */
+.mermaid-block { margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mermaid-head {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+  background: var(--card-bg); font-size: 12px; color: var(--muted);
+}
+.mermaid-head .lang { font-weight: 600; color: var(--fg); font-family: ui-monospace, Menlo, monospace; }
+.mermaid-head .mm-toggle { margin-left: auto; }
+.mermaid-head .mm-toggle, .mermaid-head .copy-btn {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 1px 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg);
+}
+.mermaid-view { padding: 14px; overflow-x: auto; text-align: center; background: var(--bg); }
+.mermaid-view svg { max-width: 100%; height: auto; }
+.mermaid-loading { color: var(--muted); font-size: 13px; padding: 8px; }
+.mermaid-error { color: var(--st-done); font-size: 12px; padding: 4px 0; }
+.mermaid-block pre { margin: 0; border-radius: 0; border: none; }
 /* foldable headings */
 #doc-body h1.foldable, #doc-body h2.foldable, #doc-body h3.foldable, #doc-body h4.foldable {
   cursor: pointer; display: flex; align-items: center; gap: 6px;
@@ -668,15 +685,87 @@ async function showDoc(id) {
 function enhanceDoc(id) {
   const body = $content.querySelector('#doc-body');
   if (!body) return;
+  enhanceMermaid(body);
   enhanceCodeBlocks(body);
   enhanceHeadings(body, id);
   addDocTools(body);
+}
+
+// Lazy-load the vendored Mermaid bundle once, themed to match the page.
+let mermaidPromise = null;
+function loadMermaid() {
+  if (mermaidPromise) return mermaidPromise;
+  mermaidPromise = new Promise((resolve, reject) => {
+    if (window.mermaid) return resolve(window.mermaid);
+    const s = document.createElement('script');
+    s.src = '/vendor/mermaid.min.js';
+    s.onload = () => {
+      if (!window.mermaid) return reject(new Error('mermaid missing'));
+      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+      window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default', securityLevel: 'strict' });
+      resolve(window.mermaid);
+    };
+    s.onerror = () => reject(new Error('failed to load mermaid'));
+    document.head.appendChild(s);
+  });
+  return mermaidPromise;
+}
+
+// Render ```mermaid blocks as diagrams, with a source toggle + copy.
+let mermaidSeq = 0;
+function enhanceMermaid(body) {
+  const pres = [...body.querySelectorAll('pre > code.lang-mermaid')].map((c) => c.closest('pre'));
+  if (!pres.length) return;
+  const items = pres.map((pre) => {
+    const src = (pre.querySelector('code').textContent || '').replace(/\n$/, '');
+    const wrap = document.createElement('div');
+    wrap.className = 'mermaid-block';
+    wrap.innerHTML = '<div class="mermaid-head"><span class="lang">mermaid</span>'
+      + '<button class="mm-toggle" type="button">source</button>'
+      + '<button class="copy-btn" type="button">Copy</button></div>'
+      + '<div class="mermaid-view"><div class="mermaid-loading">rendering diagram…</div></div>';
+    pre.parentNode.insertBefore(wrap, pre);
+    pre.style.display = 'none';
+    wrap.appendChild(pre);
+    const view = wrap.querySelector('.mermaid-view');
+    wrap.querySelector('.mm-toggle').addEventListener('click', () => {
+      const showSrc = pre.style.display === 'none';
+      pre.style.display = showSrc ? '' : 'none';
+      view.style.display = showSrc ? 'none' : '';
+      wrap.querySelector('.mm-toggle').textContent = showSrc ? 'diagram' : 'source';
+    });
+    wrap.querySelector('.copy-btn').addEventListener('click', async () => {
+      const btn = wrap.querySelector('.copy-btn');
+      try { await navigator.clipboard.writeText(src); btn.textContent = 'Copied'; } catch { btn.textContent = 'Failed'; }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+    });
+    return { src, view, wrap, pre };
+  });
+  const fallback = (it, msg) => {
+    it.view.innerHTML = `<div class="mermaid-error">${esc(msg)}</div>`;
+    it.pre.style.display = '';
+    it.view.style.display = 'none';
+    it.wrap.querySelector('.mm-toggle').textContent = 'diagram';
+  };
+  loadMermaid().then(async (mermaid) => {
+    for (const it of items) {
+      try {
+        const { svg } = await mermaid.render('mmd-' + (mermaidSeq++), it.src);
+        it.view.innerHTML = svg;
+      } catch {
+        fallback(it, 'Diagram failed to render — showing source.');
+      }
+    }
+  }).catch(() => {
+    for (const it of items) fallback(it, 'Could not load the diagram renderer — showing source.');
+  });
 }
 
 // Collapse fenced code into a header (lang · N lines) + Copy; expand on click.
 function enhanceCodeBlocks(body) {
   for (const pre of [...body.querySelectorAll('pre')]) {
     const code = pre.querySelector('code');
+    if (code && code.classList.contains('lang-mermaid')) continue; // handled as a diagram
     const langCls = code ? [...code.classList].find((c) => c.startsWith('lang-')) : '';
     const lang = langCls ? langCls.slice(5) : 'code';
     const text = code ? code.textContent.replace(/\n$/, '') : '';

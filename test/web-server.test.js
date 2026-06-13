@@ -69,6 +69,20 @@ test('SPA shell contains router, SSE, search, and persistence wiring', async (t)
   assert.match(html, /enhanceHeadings/, 'foldable sections');
   assert.match(html, /searchNodes/, 'search matches project/task names');
   assert.match(html, /jumpToNode/, 'jump-to-node from search');
+  assert.match(html, /enhanceMermaid/, 'mermaid rendering');
+  assert.match(html, /\/vendor\/mermaid\.min\.js/, 'mermaid loader');
+});
+
+test('GET /vendor/mermaid.min.js serves the bundled library', async (t) => {
+  const fx = makeFixture();
+  const { app, base } = await startApp(fx);
+  t.after(() => app.close());
+  const res = await fetch(base + '/vendor/mermaid.min.js');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /javascript/);
+  const body = await res.text();
+  assert.match(body, /mermaid/);
+  assert.ok(body.length > 100000, 'should be the real bundle, not a stub');
 });
 
 test('GET /api/tree returns groups + generation', async (t) => {
