@@ -147,6 +147,62 @@ test('project scan shows all of docs/ and .planning/ plus root entry files', () 
   ].sort());
 });
 
+test('worktrees nest under their parent repo, each carrying its own docs', () => {
+  const root = tmpdir('atem-web-wt-');
+  const repo = path.join(root, 'myrepo');
+  fs.mkdirSync(path.join(repo, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.planning', 'ROADMAP.md'), '# Repo Roadmap\n');
+  // a Claude Code worktree with its own branch-specific plan
+  const wt = path.join(repo, '.claude', 'worktrees', 'feature-x');
+  fs.mkdirSync(path.join(wt, 'docs', 'superpowers', 'plans'), { recursive: true });
+  fs.writeFileSync(path.join(wt, 'docs', 'superpowers', 'plans', 'p.md'), '# Branch Plan\n');
+
+  const tree = buildTree({
+    handlesDir: path.join(root, 'no-handles'),
+    claudeProjectsDir: path.join(root, 'no-claude'),
+    codexSessionsDir: path.join(root, 'no-codex'),
+    extraRoots: [repo, wt],
+  });
+  const projects = tree.groups.find((g) => g.kind === 'projects');
+  // exactly one top-level project node (the repo) — worktree is NOT top-level
+  assert.equal(projects.nodes.length, 1);
+  const repoNode = projects.nodes[0];
+  assert.equal(repoNode.kind, 'repo');
+  assert.equal(repoNode.label, 'myrepo');
+  assert.equal(repoNode.root, fs.realpathSync(repo));
+  assert.deepEqual(repoNode.docs.map((i) => tree.docs[i].file), ['.planning/ROADMAP.md']);
+  // worktree nested as a child, with its own docs
+  assert.equal(repoNode.children.length, 1);
+  const child = repoNode.children[0];
+  assert.equal(child.kind, 'worktree');
+  assert.equal(child.label, 'feature-x');
+  assert.equal(child.root, fs.realpathSync(wt));
+  assert.deepEqual(child.docs.map((i) => tree.docs[i].file), ['docs/superpowers/plans/p.md']);
+  assert.ok(!projects.nodes.some((n) => n.root === fs.realpathSync(wt)), 'worktree not top-level');
+});
+
+test('a parent repo appears once even when only its worktrees were discovered', () => {
+  const root = tmpdir('atem-web-wt2-');
+  const repo = path.join(root, 'solo');
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(repo, 'AGENTS.md'), '# Agents\n'); // repo has a doc but was not "visited"
+  const wt = path.join(repo, '.claude', 'worktrees', 'wt1');
+  fs.mkdirSync(path.join(wt, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.planning', 'PLAN.md'), '# WT Plan\n');
+
+  const tree = buildTree({
+    handlesDir: path.join(root, 'no-handles'),
+    claudeProjectsDir: path.join(root, 'no-claude'),
+    codexSessionsDir: path.join(root, 'no-codex'),
+    extraRoots: [wt], // only the worktree was discovered
+  });
+  const projects = tree.groups.find((g) => g.kind === 'projects');
+  assert.equal(projects.nodes.length, 1);
+  assert.equal(projects.nodes[0].label, 'solo');
+  assert.equal(projects.nodes[0].children.length, 1);
+  assert.equal(projects.nodes[0].children[0].label, 'wt1');
+});
+
 test('doc-site projects show only planning-shaped docs/ files, not the whole site', () => {
   const root = tmpdir('atem-web-docsite-');
   const proj = path.join(root, 'beta');

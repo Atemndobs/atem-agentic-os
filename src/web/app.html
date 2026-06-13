@@ -72,6 +72,7 @@ body {
   font-size: 10px; padding: 1px 6px; border-radius: 999px;
   background: var(--badge-bg); color: var(--badge-fg); font-weight: 600;
 }
+.badge.wt { background: var(--code-bg); color: var(--muted); }
 .doc-link {
   display: block; padding: 3px 6px 3px 26px; border-radius: 6px;
   color: var(--fg); text-decoration: none; font-size: 13px;
@@ -170,7 +171,9 @@ body {
 'use strict';
 let tree = { generation: 0, docs: [], groups: [] };
 let openDoc = null; // last /api/doc response
-const collapsed = new Set(JSON.parse(localStorage.getItem('atem-web-collapsed') || '[]'));
+// Which tree nodes are expanded. Seeded with the two groups on first run
+// so the sidebar opens as a scannable list of repos/tasks (all collapsed).
+const open = new Set(JSON.parse(localStorage.getItem('atem-web-open') || 'null') || ['group:tasks', 'group:projects']);
 
 const $nav = document.getElementById('nav');
 const $content = document.getElementById('content');
@@ -199,8 +202,8 @@ function resolvePath(base, rel) {
   }
   return '/' + out.join('/');
 }
-function saveCollapsed() {
-  localStorage.setItem('atem-web-collapsed', JSON.stringify([...collapsed]));
+function saveOpen() {
+  localStorage.setItem('atem-web-open', JSON.stringify([...open]));
 }
 function currentDocId() {
   const m = location.hash.match(/^#\/doc\/(\d+)$/);
@@ -208,37 +211,43 @@ function currentDocId() {
 }
 
 /* ── sidebar tree ────────────────────────────────────── */
-function renderNav() {
+function renderNode(node, depth) {
   const active = currentDocId();
+  const isOpen = open.has(node.key);
+  const pad = 6 + depth * 14;
+  const badge = node.provider ? `<span class="badge">${esc(node.provider)}</span>` : '';
+  const wt = node.kind === 'worktree' ? '<span class="badge wt">worktree</span>' : '';
+  let html = `<div class="node">
+    <div class="node-label" data-toggle="${esc(node.key)}" style="padding-left:${pad}px" title="${esc(node.root || node.label)}">
+      <span class="chev">${isOpen ? '▾' : '▸'}</span>${esc(node.label)} ${badge}${wt}
+    </div>`;
+  if (isOpen) {
+    for (const id of node.docs) {
+      const d = tree.docs[id];
+      html += `<a class="doc-link${id === active ? ' active' : ''}" href="#/doc/${id}" style="padding-left:${pad + 20}px" title="${esc(d.file)}">${esc(d.file)}</a>`;
+    }
+    for (const child of (node.children || [])) html += renderNode(child, depth + 1);
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderNav() {
   let html = '';
   for (const group of tree.groups) {
     const gKey = 'group:' + group.kind;
-    const gOpen = !collapsed.has(gKey);
+    const gOpen = open.has(gKey);
     const title = group.kind === 'tasks' ? 'Tasks' : 'Projects';
     html += `<div class="group-title" data-toggle="${gKey}">${gOpen ? '▾' : '▸'} ${title} (${group.nodes.length})</div>`;
     if (!gOpen) continue;
-    for (const node of group.nodes) {
-      const open = !collapsed.has(node.key);
-      const badge = node.provider ? `<span class="badge">${esc(node.provider)}</span>` : '';
-      html += `<div class="node">
-        <div class="node-label" data-toggle="${esc(node.key)}" title="${esc(node.root || node.label)}">
-          <span class="chev">${open ? '▾' : '▸'}</span>${esc(node.label)} ${badge}
-        </div>`;
-      if (open) {
-        for (const id of node.docs) {
-          const d = tree.docs[id];
-          html += `<a class="doc-link${id === active ? ' active' : ''}" href="#/doc/${id}" title="${esc(d.file)}">${esc(d.file)}</a>`;
-        }
-      }
-      html += '</div>';
-    }
+    for (const node of group.nodes) html += renderNode(node, 0);
   }
   $nav.innerHTML = html;
   for (const el of $nav.querySelectorAll('[data-toggle]')) {
     el.addEventListener('click', () => {
       const key = el.getAttribute('data-toggle');
-      collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
-      saveCollapsed();
+      open.has(key) ? open.delete(key) : open.add(key);
+      saveOpen();
       renderNav();
     });
   }
@@ -263,12 +272,47 @@ $search.addEventListener('input', () => {
 });
 
 /* ── document view ───────────────────────────────────── */
-function nodeOf(doc) {
-  for (const g of tree.groups) {
-    const n = g.nodes.find((n) => n.key === doc.key || n.key === doc.nodeKey);
-    if (n) return n;
-  }
+function findNode(key) {
+  const walk = (nodes) => {
+    for (const n of nodes) {
+      if (n.key === key) return n;
+      if (n.children) { const r = walk(n.children); if (r) return r; }
+    }
+    return null;
+  };
+  for (const g of tree.groups) { const r = walk(g.nodes); if (r) return r; }
   return null;
+}
+function nodeOf(doc) { return findNode(doc.key || doc.nodeKey); }
+
+// Human label for a doc's node, including the parent repo for worktrees.
+function nodePathLabel(key) {
+  for (const g of tree.groups) {
+    for (const n of g.nodes) {
+      if (n.key === key) return n.label + (n.provider ? ` (${n.provider})` : '');
+      if (n.children) {
+        const c = n.children.find((c) => c.key === key);
+        if (c) return `${n.label} / ${c.label}`;
+      }
+    }
+  }
+  return '';
+}
+
+// Expand the group, the containing node, and (for worktrees) the parent
+// repo so a freshly-opened doc is visible/highlighted in the sidebar.
+function expandToDoc(doc) {
+  const key = doc.nodeKey || doc.key;
+  let changed = false;
+  const ensure = (k) => { if (k && !open.has(k)) { open.add(k); changed = true; } };
+  ensure('group:' + (doc.group || 'projects'));
+  ensure(key);
+  if (key.startsWith('worktree:')) {
+    for (const g of tree.groups) for (const n of g.nodes) {
+      if (n.children && n.children.some((c) => c.key === key)) ensure(n.key);
+    }
+  }
+  if (changed) saveOpen();
 }
 
 function renderToc() {
@@ -317,6 +361,7 @@ async function showDoc(id) {
   }
   const doc = await res.json();
   openDoc = doc;
+  expandToDoc(doc);
   const node = nodeOf(doc);
   const where = node ? (node.root || node.label) : '';
   const body = showRaw
@@ -339,17 +384,10 @@ async function showDoc(id) {
 function showDashboard() {
   openDoc = null;
   const recent = [...tree.docs].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
-  const nodeLabel = (d) => {
-    for (const g of tree.groups) {
-      const n = g.nodes.find((n) => n.key === d.nodeKey);
-      if (n) return n.label + (n.provider ? ` (${n.provider})` : '');
-    }
-    return '';
-  };
   const items = recent.map((d) => `
     <a class="dash-item" href="#/doc/${d.id}">
       <div><div class="d-title">${esc(d.title)}</div>
-      <div class="d-sub">${esc(nodeLabel(d))} · ${esc(d.file)}</div></div>
+      <div class="d-sub">${esc(nodePathLabel(d.nodeKey))} · ${esc(d.file)}</div></div>
       <div class="d-when">${ago(d.mtime)}</div>
     </a>`).join('');
   $content.innerHTML = `<h2>Recently updated</h2>${items || '<div class="empty">No planning documents found yet.</div>'}`;
