@@ -37,10 +37,10 @@ src/web/
 
 Returns a tree of documents from both sources:
 
-- **Tasks group:** every session directory under `~/.atem/harness/sessions/`, using existing `src/handles.js` (`listHandles()`) and `src/adapters/session.js` helpers. Each task exposes its seven canonical markdown files. Provider (claude-code, codex, …) is derived from the handle name.
-- **Projects group:** the union of repos referenced by any task (`session.listRepos(taskId)`) plus the current working repo. Each repo is scanned for planning docs reusing the path constants already exported by `src/context.js` (`PLAN_DIRS`, research/decisions dirs, purpose docs) — but listing **all** matching markdown files, without the `MAX_PLANS` cap. Scanned locations: `.planning/**/*.md`, `docs/sub-plans/*.md`, `docs/PLAN.md`, `docs/action-plan.md`, `PLAN.md`, `AGENTS.md`.
+- **Tasks group:** every session directory under `~/.atem/harness/sessions/`, using existing `src/handles.js` (`listHandles()`) and `src/adapters/session.js` helpers, **excluding `_archive/`** (same convention as `src/recovery.js`). Each task exposes its seven canonical markdown files. Provider (claude-code, codex, …) is derived from the handle name prefix; ids without a provider prefix (e.g. `TASK-002`) get no provider badge.
+- **Projects group:** the union of repos referenced by any task (`session.listRepos(taskId)`) plus the current working repo. Each repo is scanned for planning docs reusing the path constants already exported by `src/context.js` — listing **all** matching markdown files, without the `MAX_PLANS` cap. Authoritative scan list: `.planning/**/*.md`, `docs/sub-plans/*.md`, the research and decisions dirs from `context.js` constants (`docs/research/`, `docs/decisions/`, `.planning/research/`, `.planning/decisions/` — already covered by `.planning/**`), `docs/PLAN.md`, `docs/action-plan.md`, `PLAN.md`, `AGENTS.md`.
 
-Every document gets an opaque numeric id (its index in the scanned list). Missing directories and unreadable repos are skipped silently.
+Every document gets an opaque numeric id (its index in the scanned list). Ids are stable within one scan generation; after a rescan (live reload), the client re-resolves its open document via the refetched tree using the server-provided node/filename keys — a rescan must never silently swap the displayed document. Missing directories and unreadable repos are skipped silently.
 
 ### markdown.js — renderer
 
@@ -74,7 +74,7 @@ Security properties:
 - Clients reference documents only by opaque id — paths never round-trip through the client, so path traversal is impossible by construction.
 - All rendered content passes through the escaping renderer.
 
-Port handling: default port, auto-increment if in use. `--no-open` skips launching the browser.
+Port handling: default port **4400**, auto-increment if in use. `--no-open` skips launching the browser.
 
 ## UI
 
