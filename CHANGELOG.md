@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `atem web`: interactive document reading — fenced **code blocks collapse**
+  by default into a `lang · N lines` header with a Copy button (expand on
+  click); **headings fold** their section (with Expand all / Collapse all);
+  a **task progress bar** (`N/M done`) pins to the top of plans with
+  checkboxes; and **section copy-links** (hover a heading) yield a deep link
+  `#/doc/<id>/<section>` that scrolls straight to it.
 - `atem web`: collapsible **Settings panel** to show/hide parts of the view —
   toggles for Tasks, worktrees, Claude memory, executed plans, and other
   (uncategorized) docs, plus hide-lists for folders, files, and projects.
