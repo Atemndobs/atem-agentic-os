@@ -10,6 +10,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const { getHandlesRoot } = require('../handles.js');
 const { PURPOSE_CANDIDATES } = require('../context.js');
@@ -186,6 +187,33 @@ function discoverRoots(opts = {}) {
   return roots;
 }
 
+// Resolve a discovered root to its parent repo. Worktrees should not show
+// as separate top-level projects — they nest under the repo they belong
+// to. Two signals: the Claude Code path convention (<repo>/.claude/
+// worktrees/<name>), then git's common dir as a general fallback.
+function resolveRepo(root, cache = new Map()) {
+  const m = root.match(/^(.*)\/\.claude\/worktrees\/[^/]+$/);
+  if (m && isDir(m[1])) return { repo: m[1], isWorktree: true };
+
+  if (cache.has(root)) return cache.get(root);
+  let result = { repo: root, isWorktree: false };
+  try {
+    const out = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out) {
+      const mainRepo = path.dirname(out); // .../<repo>/.git → .../<repo>
+      let real = root;
+      try { real = fs.realpathSync(root); } catch { /* keep */ }
+      if (mainRepo && mainRepo !== real && isDir(mainRepo)) {
+        result = { repo: mainRepo, isWorktree: true };
+      }
+    }
+  } catch { /* not a git repo / git absent — treat as its own repo */ }
+  cache.set(root, result);
+  return result;
+}
+
 function docTitle(absPath) {
   try {
     const head = fs.readFileSync(absPath, 'utf8').slice(0, 2048);
@@ -283,17 +311,44 @@ function buildTree(opts = {}) {
   }
   taskNodes.sort((a, b) => b.mtime - a.mtime);
 
-  // Projects group
+  // Projects group — worktrees nest under the repo they belong to, so a
+  // repo shows once with its worktrees (and their docs) beneath it.
   const roots = discoverRoots({ ...opts, taskIds });
-  const projectNodes = [];
+  const repoCache = new Map();
+  const realpath = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+
+  // Group discovered roots by their parent repo.
+  const repos = new Map(); // repoPath → { repo, worktrees:Set }
+  const ensureRepo = (repoPath) => {
+    if (!repos.has(repoPath)) repos.set(repoPath, { repo: repoPath, worktrees: new Set() });
+    return repos.get(repoPath);
+  };
   for (const root of roots) {
+    const { repo, isWorktree } = resolveRepo(root, repoCache);
+    const entry = ensureRepo(realpath(repo));
+    if (isWorktree) entry.worktrees.add(root);
+  }
+
+  const scanIntoNode = (root, kind) => {
     const projectDocs = scanProjectDocs(root);
-    if (!projectDocs.length) continue;
-    const nodeKey = `project:${root}`;
+    const nodeKey = kind === 'worktree' ? `worktree:${root}` : `project:${root}`;
     const ids = projectDocs.map((d) => newDoc({
       path: d.abs, file: d.rel, title: d.title, mtime: d.mtime, nodeKey, group: 'projects',
     }));
-    projectNodes.push({ key: nodeKey, label: path.basename(root), root, docs: ids });
+    return { key: nodeKey, label: path.basename(root), root, kind, docs: ids };
+  };
+
+  const projectNodes = [];
+  for (const { repo, worktrees } of repos.values()) {
+    const repoNode = scanIntoNode(repo, 'repo');
+    repoNode.children = [];
+    for (const wt of [...worktrees].sort()) {
+      const child = scanIntoNode(wt, 'worktree');
+      if (child.docs.length) repoNode.children.push(child);
+    }
+    repoNode.children.sort((a, b) => a.label.localeCompare(b.label));
+    if (!repoNode.docs.length && !repoNode.children.length) continue;
+    projectNodes.push(repoNode);
   }
   projectNodes.sort((a, b) => a.label.localeCompare(b.label));
 
