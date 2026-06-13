@@ -50,9 +50,25 @@ body {
   #sidebar.open { transform: none; }
   #content { padding-top: 52px; }
 }
-#sidebar h1 { font-size: 14px; margin: 4px 4px 12px; letter-spacing: .04em; }
-#sidebar h1 a { color: var(--fg); text-decoration: none; }
+#sidebar h1 { font-size: 14px; margin: 4px 4px 12px; letter-spacing: .04em; display: flex; align-items: center; }
+#sidebar h1 a { color: var(--fg); text-decoration: none; flex: 1; }
 #sidebar h1 .sep { color: var(--accent); }
+#sidebar-collapse {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+#sidebar-collapse:hover { background: var(--accent-bg); color: var(--fg); }
+#sidebar-expand {
+  display: none; position: fixed; top: 10px; left: 10px; z-index: 10;
+  background: var(--sidebar-bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 11px; font: inherit; cursor: pointer;
+}
+#atem-web-app.sidebar-collapsed #sidebar { display: none; }
+#atem-web-app.sidebar-collapsed #sidebar-expand { display: block; }
+@media (max-width: 520px) {
+  #sidebar-collapse, #sidebar-expand { display: none !important; }
+  #atem-web-app.sidebar-collapsed #sidebar { display: block; }
+}
 #search {
   width: 100%; padding: 7px 10px; margin-bottom: 12px;
   border: 1px solid var(--border); border-radius: 8px;
@@ -205,11 +221,23 @@ body {
   background: var(--card-bg); font-size: 12px; color: var(--muted);
 }
 .mermaid-head .lang { font-weight: 600; color: var(--fg); font-family: ui-monospace, Menlo, monospace; }
-.mermaid-head .mm-toggle { margin-left: auto; }
-.mermaid-head .mm-toggle, .mermaid-head .copy-btn {
+.mermaid-head .mm-full { margin-left: auto; }
+.mermaid-head .mm-full, .mermaid-head .mm-toggle, .mermaid-head .copy-btn {
   font: inherit; font-size: 11px; cursor: pointer; padding: 1px 8px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg);
 }
+/* mermaid full-screen overlay */
+#mm-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.86); display: flex; flex-direction: column; }
+#mm-overlay[hidden] { display: none; }
+#mm-overlay .mm-bar { display: flex; gap: 8px; padding: 10px; justify-content: flex-end; }
+#mm-overlay .mm-bar button {
+  font: inherit; font-size: 13px; cursor: pointer; padding: 4px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); color: var(--fg);
+}
+#mm-overlay .mm-stage-wrap { flex: 1; overflow: hidden; cursor: grab; display: flex; align-items: center; justify-content: center; }
+#mm-overlay .mm-stage-wrap.grabbing { cursor: grabbing; }
+#mm-overlay .mm-stage { transform-origin: center center; will-change: transform; }
+#mm-overlay .mm-stage svg { max-width: none; height: auto; background: var(--bg); border-radius: 8px; padding: 12px; }
 .mermaid-view { padding: 14px; overflow-x: auto; text-align: center; background: var(--bg); }
 .mermaid-view svg { max-width: 100%; height: auto; }
 .mermaid-loading { color: var(--muted); font-size: 13px; padding: 8px; }
@@ -256,8 +284,9 @@ body {
 <body>
 <div id="atem-web-app">
   <button id="menu-btn" title="Toggle navigation">☰</button>
+  <button id="sidebar-expand" title="Show sidebar">»</button>
   <nav id="sidebar">
-    <h1><a href="#/">ATEM<span class="sep">·</span>plans</a></h1>
+    <h1><a href="#/">ATEM<span class="sep">·</span>plans</a><button id="sidebar-collapse" title="Hide sidebar">«</button></h1>
     <input id="search" type="search" placeholder="Search planning docs…" autocomplete="off">
     <div class="legend">
       <span><span class="dot active">●</span> active</span>
@@ -721,6 +750,7 @@ function enhanceMermaid(body) {
     const wrap = document.createElement('div');
     wrap.className = 'mermaid-block';
     wrap.innerHTML = '<div class="mermaid-head"><span class="lang">mermaid</span>'
+      + '<button class="mm-full" type="button" title="Full screen">⤢ full screen</button>'
       + '<button class="mm-toggle" type="button">source</button>'
       + '<button class="copy-btn" type="button">Copy</button></div>'
       + '<div class="mermaid-view"><div class="mermaid-loading">rendering diagram…</div></div>';
@@ -728,6 +758,10 @@ function enhanceMermaid(body) {
     pre.style.display = 'none';
     wrap.appendChild(pre);
     const view = wrap.querySelector('.mermaid-view');
+    wrap.querySelector('.mm-full').addEventListener('click', () => {
+      const svg = view.querySelector('svg');
+      if (svg) openMermaidFullscreen(svg);
+    });
     wrap.querySelector('.mm-toggle').addEventListener('click', () => {
       const showSrc = pre.style.display === 'none';
       pre.style.display = showSrc ? '' : 'none';
@@ -916,6 +950,83 @@ window.addEventListener('hashchange', () => {
 document.getElementById('menu-btn').addEventListener('click', () => {
   document.getElementById('sidebar').classList.toggle('open');
 });
+
+/* ── sidebar collapse (desktop drawer) ───────────────── */
+const appEl = document.getElementById('atem-web-app');
+if (localStorage.getItem('atem-web-sidebar-collapsed') === '1') appEl.classList.add('sidebar-collapsed');
+function setSidebarCollapsed(v) {
+  appEl.classList.toggle('sidebar-collapsed', v);
+  localStorage.setItem('atem-web-sidebar-collapsed', v ? '1' : '0');
+}
+document.getElementById('sidebar-collapse').addEventListener('click', () => setSidebarCollapsed(true));
+document.getElementById('sidebar-expand').addEventListener('click', () => setSidebarCollapsed(false));
+
+/* ── mermaid full-screen (pan + zoom) ────────────────── */
+const mmOverlay = (() => {
+  const el = document.createElement('div');
+  el.id = 'mm-overlay';
+  el.hidden = true;
+  el.innerHTML = '<div class="mm-bar">'
+    + '<button data-z="out" title="Zoom out">−</button>'
+    + '<button data-z="in" title="Zoom in">＋</button>'
+    + '<button data-z="reset">reset</button>'
+    + '<button class="mm-close">✕ close</button></div>'
+    + '<div class="mm-stage-wrap"><div class="mm-stage"></div></div>';
+  document.body.appendChild(el);
+  return el;
+})();
+const mmStage = mmOverlay.querySelector('.mm-stage');
+const mmWrap = mmOverlay.querySelector('.mm-stage-wrap');
+let mmScale = 1, mmX = 0, mmY = 0, mmDrag = false, mmSx = 0, mmSy = 0;
+function mmApply() { mmStage.style.transform = `translate(${mmX}px,${mmY}px) scale(${mmScale})`; }
+function openMermaidFullscreen(svg) {
+  mmStage.innerHTML = '';
+  const clone = svg.cloneNode(true);
+  // Mermaid SVGs use width="100%"; give the clone its intrinsic size so it
+  // renders at real dimensions (not collapsed) inside the unsized stage.
+  const vb = (clone.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+  let w = vb[2], h = vb[3];
+  clone.removeAttribute('width');
+  clone.removeAttribute('height');
+  clone.style.maxWidth = 'none';
+  if (w && h) { clone.style.width = w + 'px'; clone.style.height = h + 'px'; }
+  mmStage.appendChild(clone);
+  mmScale = 1; mmX = 0; mmY = 0; mmApply();
+  mmOverlay.hidden = false;
+  requestAnimationFrame(() => {
+    if (!w || !h) { const r = clone.getBoundingClientRect(); w = r.width; h = r.height; }
+    const vw = mmWrap.clientWidth || document.documentElement.clientWidth || window.innerWidth || 0;
+    const vh = mmWrap.clientHeight || (document.documentElement.clientHeight - 60) || 0;
+    if (w && h && vw > 100 && vh > 100) {
+      mmScale = Math.max(0.1, Math.min(8, Math.min(vw * 0.94 / w, vh * 0.94 / h)));
+      mmApply();
+    }
+  });
+}
+function closeMM() { mmOverlay.hidden = true; mmStage.innerHTML = ''; }
+mmOverlay.querySelector('.mm-close').addEventListener('click', closeMM);
+mmWrap.addEventListener('click', (e) => { if (e.target === mmWrap) closeMM(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !mmOverlay.hidden) closeMM(); });
+for (const b of mmOverlay.querySelectorAll('.mm-bar [data-z]')) {
+  b.addEventListener('click', () => {
+    const z = b.dataset.z;
+    if (z === 'in') mmScale = Math.min(20, mmScale * 1.25);
+    else if (z === 'out') mmScale = Math.max(0.1, mmScale / 1.25);
+    else { mmScale = 1; mmX = 0; mmY = 0; }
+    mmApply();
+  });
+}
+mmWrap.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  mmScale = Math.min(20, Math.max(0.1, mmScale * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  mmApply();
+}, { passive: false });
+mmWrap.addEventListener('pointerdown', (e) => {
+  mmDrag = true; mmSx = e.clientX - mmX; mmSy = e.clientY - mmY;
+  mmWrap.classList.add('grabbing'); mmWrap.setPointerCapture(e.pointerId);
+});
+mmWrap.addEventListener('pointermove', (e) => { if (mmDrag) { mmX = e.clientX - mmSx; mmY = e.clientY - mmSy; mmApply(); } });
+mmWrap.addEventListener('pointerup', () => { mmDrag = false; mmWrap.classList.remove('grabbing'); });
 
 /* ── live reload ─────────────────────────────────────── */
 async function refreshTree() {
