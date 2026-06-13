@@ -46,6 +46,10 @@ atem install          # registers ATEM as an MCP server in every detected provid
 
 Then restart your provider apps so they load the new MCP config.
 
+**Installing on another machine (incl. Windows)?** Build a portable bundle with
+`npm pack` and `npm install -g` the `.tgz` on the target — see
+[docs/INSTALL.md](docs/INSTALL.md).
+
 ### Provider matrix
 
 | Provider | Detection | Distillation | Launcher | MCP installer |

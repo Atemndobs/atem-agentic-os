@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — 2026-06-13
+
+Adds the `atem web` planning viewer and makes ATEM installable on other
+machines (incl. Windows) as a portable npm tarball. `atem web` opens the
+browser cross-platform (macOS `open`, Windows `start`, Linux `xdg-open`).
 
 - `atem web`: hand-off tasks now nest under the project they target
   (resolved from the task's `repo`/`target_repo`/`cwd`), shown with a
