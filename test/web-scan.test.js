@@ -31,6 +31,11 @@ function makeFixture() {
   fs.writeFileSync(path.join(proj, 'docs', 'sub-plans', 'sub-plan-1.md'), '# Sub 1\n');
   fs.writeFileSync(path.join(proj, 'PLAN.md'), '# Alpha Plan\n');
   fs.writeFileSync(path.join(proj, 'AGENTS.md'), '# Agents\n');
+  // superpowers brainstorming/writing-plans output
+  fs.mkdirSync(path.join(proj, 'docs', 'superpowers', 'specs'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'docs', 'superpowers', 'plans'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'docs', 'superpowers', 'specs', '2026-01-01-feature-design.md'), '# Feature Design\n');
+  fs.writeFileSync(path.join(proj, 'docs', 'superpowers', 'plans', '2026-01-01-feature.md'), '# Feature Plan\n');
 
   // A project with NO planning docs (must be omitted)
   const bare = path.join(root, 'projects', 'bare');
@@ -131,6 +136,8 @@ test('project scan finds .planning/**, PLAN.md, AGENTS.md, docs/sub-plans, uncap
     'AGENTS.md',
     'PLAN.md',
     'docs/sub-plans/sub-plan-1.md',
+    'docs/superpowers/specs/2026-01-01-feature-design.md',
+    'docs/superpowers/plans/2026-01-01-feature.md',
   ].sort());
 });
 
