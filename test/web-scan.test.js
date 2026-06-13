@@ -203,6 +203,82 @@ test('a parent repo appears once even when only its worktrees were discovered', 
   assert.equal(projects.nodes[0].children[0].label, 'wt1');
 });
 
+function statusOpts(root, extra = {}) {
+  return {
+    handlesDir: path.join(root, 'no-handles'),
+    claudeProjectsDir: path.join(root, 'no-claude'),
+    codexSessionsDir: path.join(root, 'no-codex'),
+    ...extra,
+  };
+}
+
+test('plan status: main role doc is blue, newest plan green, older plans orange', () => {
+  const root = tmpdir('atem-web-status-');
+  const repo = path.join(root, 'proj');
+  fs.mkdirSync(path.join(repo, 'docs', 'superpowers', 'plans'), { recursive: true });
+  fs.mkdirSync(path.join(repo, 'docs', 'research'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs', 'action-plan.md'), '# Action Plan\n');
+  const older = path.join(repo, 'docs', 'superpowers', 'plans', 'old-plan.md');
+  const newer = path.join(repo, 'docs', 'superpowers', 'plans', 'new-plan.md');
+  fs.writeFileSync(older, '# Old\n');
+  fs.writeFileSync(newer, '# New\n');
+  const now = Date.now();
+  fs.utimesSync(older, new Date(now - 100000), new Date(now - 100000));
+  fs.utimesSync(newer, new Date(now), new Date(now));
+  fs.writeFileSync(path.join(repo, 'docs', 'research', 'notes.md'), '# Notes\n');
+
+  const tree = buildTree(statusOpts(root, { extraRoots: [repo] }));
+  const node = tree.groups.find((g) => g.kind === 'projects').nodes[0];
+  const byFile = {};
+  for (const id of node.docs) byFile[tree.docs[id].file] = tree.docs[id].status;
+  assert.equal(byFile['docs/action-plan.md'], 'main');
+  assert.equal(byFile['docs/superpowers/plans/new-plan.md'], 'active');
+  assert.equal(byFile['docs/superpowers/plans/old-plan.md'], 'done');
+  assert.equal(byFile['docs/research/notes.md'], null);
+});
+
+test('frontmatter status overrides recency (newest marked complete is not active)', () => {
+  const root = tmpdir('atem-web-status2-');
+  const repo = path.join(root, 'proj');
+  fs.mkdirSync(path.join(repo, 'docs', 'plans'), { recursive: true });
+  const done = path.join(repo, 'docs', 'plans', 'shipped-plan.md');
+  const wip = path.join(repo, 'docs', 'plans', 'wip-plan.md');
+  fs.writeFileSync(done, '---\nstatus: complete\n---\n# Shipped\n');
+  fs.writeFileSync(wip, '# WIP\n');
+  const now = Date.now();
+  fs.utimesSync(done, new Date(now), new Date(now));           // newest
+  fs.utimesSync(wip, new Date(now - 50000), new Date(now - 50000));
+
+  const tree = buildTree(statusOpts(root, { extraRoots: [repo] }));
+  const node = tree.groups.find((g) => g.kind === 'projects').nodes[0];
+  const byFile = {};
+  for (const id of node.docs) byFile[tree.docs[id].file] = tree.docs[id].status;
+  assert.equal(byFile['docs/plans/shipped-plan.md'], 'done');  // explicit override wins
+  assert.equal(byFile['docs/plans/wip-plan.md'], 'active');    // newest without override
+});
+
+test('Claude project memory plans attach under a ‹claude memory› folder', () => {
+  const root = tmpdir('atem-web-mem-');
+  const repo = path.join(root, 'proj');
+  fs.mkdirSync(path.join(repo, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.planning', 'ROADMAP.md'), '# RM\n');
+  // claude-projects registry entry decoding to repo, with a memory dir
+  const claudeProjects = path.join(root, 'claude-projects');
+  const encoded = path.join(claudeProjects, repo.replace(/\//g, '-'), 'memory');
+  fs.mkdirSync(encoded, { recursive: true });
+  fs.writeFileSync(path.join(encoded, 'project_x_plan.md'), '# Hidden Plan\n');
+  fs.writeFileSync(path.join(encoded, 'user_role.md'), '# Role\n');
+
+  const tree = buildTree(statusOpts(root, { claudeProjectsDir: claudeProjects, extraRoots: [repo] }));
+  const node = tree.groups.find((g) => g.kind === 'projects').nodes[0];
+  const files = node.docs.map((i) => tree.docs[i].file);
+  assert.ok(files.includes('‹claude memory›/project_x_plan.md'), `got ${files}`);
+  assert.ok(files.includes('‹claude memory›/user_role.md'));
+  // the memory doc resolves to the real hidden path
+  const memDoc = node.docs.map((i) => tree.docs[i]).find((d) => d.file === '‹claude memory›/project_x_plan.md');
+  assert.ok(memDoc.path.includes('/memory/project_x_plan.md'));
+});
+
 test('doc-site projects show only planning-shaped docs/ files, not the whole site', () => {
   const root = tmpdir('atem-web-docsite-');
   const proj = path.join(root, 'beta');

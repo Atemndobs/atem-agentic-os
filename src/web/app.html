@@ -9,12 +9,14 @@
   --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e5e7eb;
   --sidebar-bg: #f8fafc; --accent: #2563eb; --accent-bg: #eff6ff;
   --code-bg: #f3f4f6; --card-bg: #f9fafb; --badge-bg: #e0e7ff; --badge-fg: #3730a3;
+  --st-active: #16a34a; --st-main: #2563eb; --st-done: #d97706;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1115; --fg: #e5e7eb; --muted: #9ca3af; --border: #272b33;
     --sidebar-bg: #151821; --accent: #60a5fa; --accent-bg: #1e2a45;
     --code-bg: #1b1f29; --card-bg: #161a23; --badge-bg: #2b3354; --badge-fg: #b3c2f7;
+    --st-active: #22c55e; --st-main: #60a5fa; --st-done: #f59e0b;
   }
 }
 * { box-sizing: border-box; }
@@ -50,7 +52,7 @@ body {
 }
 #sidebar h1 { font-size: 14px; margin: 4px 4px 12px; letter-spacing: .04em; }
 #sidebar h1 a { color: var(--fg); text-decoration: none; }
-#sidebar h1 .dot { color: var(--accent); }
+#sidebar h1 .sep { color: var(--accent); }
 #search {
   width: 100%; padding: 7px 10px; margin-bottom: 12px;
   border: 1px solid var(--border); border-radius: 8px;
@@ -73,13 +75,35 @@ body {
   background: var(--badge-bg); color: var(--badge-fg); font-weight: 600;
 }
 .badge.wt { background: var(--code-bg); color: var(--muted); }
+.node-label .count, .result .r-snippet .count {
+  margin-left: auto; font-size: 10px; color: var(--muted); font-weight: 500; padding-left: 6px;
+}
+.folder-label {
+  display: flex; align-items: center; gap: 4px; padding: 3px 6px;
+  border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.folder-label:hover { background: var(--accent-bg); }
+.folder-label .chev { color: var(--muted); font-size: 10px; width: 10px; }
+.folder-label .ficon { font-size: 12px; }
 .doc-link {
-  display: block; padding: 3px 6px 3px 26px; border-radius: 6px;
+  display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px;
   color: var(--fg); text-decoration: none; font-size: 13px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .doc-link:hover { background: var(--accent-bg); }
-.doc-link.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.doc-link.active { background: var(--accent-bg); font-weight: 600; }
+.dot { font-size: 9px; flex: 0 0 auto; }
+.dot.none { width: 9px; display: inline-block; }
+.dot.active { color: var(--st-active); }
+.dot.main { color: var(--st-main); }
+.dot.done { color: var(--st-done); }
+.doc-link.st-active { color: var(--st-active); }
+.doc-link.st-main { color: var(--st-main); }
+.doc-link.st-done { color: var(--st-done); }
+/* legend */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 0 4px 12px; font-size: 11px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 4px; }
 .result { display: block; padding: 6px; border-radius: 6px; text-decoration: none; color: var(--fg); }
 .result:hover { background: var(--accent-bg); }
 .result .r-title { font-size: 13px; font-weight: 600; }
@@ -158,8 +182,13 @@ body {
 <div id="atem-web-app">
   <button id="menu-btn" title="Toggle navigation">☰</button>
   <nav id="sidebar">
-    <h1><a href="#/">ATEM<span class="dot">·</span>plans</a></h1>
+    <h1><a href="#/">ATEM<span class="sep">·</span>plans</a></h1>
     <input id="search" type="search" placeholder="Search planning docs…" autocomplete="off">
+    <div class="legend">
+      <span><span class="dot active">●</span> active</span>
+      <span><span class="dot main">●</span> main plan</span>
+      <span><span class="dot done">●</span> executed</span>
+    </div>
     <div id="nav"></div>
   </nav>
   <div id="main">
@@ -211,21 +240,69 @@ function currentDocId() {
 }
 
 /* ── sidebar tree ────────────────────────────────────── */
-function renderNode(node, depth) {
+// Build a nested folder tree from a node's docs (each doc.file is a path).
+function buildFolderTree(docIds) {
+  const rootF = { folders: new Map(), files: [] };
+  for (const id of docIds) {
+    const d = tree.docs[id];
+    const parts = d.file.split('/');
+    let cur = rootF;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      if (!cur.folders.has(seg)) cur.folders.set(seg, { folders: new Map(), files: [] });
+      cur = cur.folders.get(seg);
+    }
+    cur.files.push({ id, name: parts[parts.length - 1], mtime: d.mtime, status: d.status });
+  }
+  return rootF;
+}
+function folderMtime(folder) {
+  let m = 0;
+  for (const f of folder.files) m = Math.max(m, f.mtime);
+  for (const [, sub] of folder.folders) m = Math.max(m, folderMtime(sub));
+  return m;
+}
+// Folders + files of one level, sorted newest-first.
+function folderEntries(folder) {
+  const entries = [];
+  for (const [name, sub] of folder.folders) entries.push({ type: 'folder', name, sub, mtime: folderMtime(sub) });
+  for (const f of folder.files) entries.push({ type: 'file', ...f });
+  entries.sort((a, b) => b.mtime - a.mtime);
+  return entries;
+}
+function renderFolder(folder, nodeKey, prefix, depth) {
   const active = currentDocId();
+  let html = '';
+  for (const e of folderEntries(folder)) {
+    const pad = 6 + depth * 14;
+    if (e.type === 'folder') {
+      const fpath = prefix ? prefix + '/' + e.name : e.name;
+      const fkey = `folder:${nodeKey}:${fpath}`;
+      const fopen = open.has(fkey);
+      html += `<div class="folder-label" data-toggle="${esc(fkey)}" style="padding-left:${pad}px">
+        <span class="chev">${fopen ? '▾' : '▸'}</span><span class="ficon">${fopen ? '📂' : '📁'}</span> ${esc(e.name)}</div>`;
+      if (fopen) html += renderFolder(e.sub, nodeKey, fpath, depth + 1);
+    } else {
+      const st = e.status ? ` st-${e.status}` : '';
+      const dot = e.status ? `<span class="dot ${e.status}">●</span>` : '<span class="dot none"></span>';
+      html += `<a class="doc-link${e.id === active ? ' active' : ''}${st}" href="#/doc/${e.id}" style="padding-left:${pad + 16}px" title="${esc(e.name)}">${dot}${esc(e.name)}</a>`;
+    }
+  }
+  return html;
+}
+
+function renderNode(node, depth) {
   const isOpen = open.has(node.key);
   const pad = 6 + depth * 14;
   const badge = node.provider ? `<span class="badge">${esc(node.provider)}</span>` : '';
   const wt = node.kind === 'worktree' ? '<span class="badge wt">worktree</span>' : '';
+  const count = node.docs.length + (node.children ? node.children.reduce((s, c) => s + c.docs.length, 0) : 0);
   let html = `<div class="node">
     <div class="node-label" data-toggle="${esc(node.key)}" style="padding-left:${pad}px" title="${esc(node.root || node.label)}">
-      <span class="chev">${isOpen ? '▾' : '▸'}</span>${esc(node.label)} ${badge}${wt}
+      <span class="chev">${isOpen ? '▾' : '▸'}</span>${esc(node.label)} ${badge}${wt}<span class="count">${count}</span>
     </div>`;
   if (isOpen) {
-    for (const id of node.docs) {
-      const d = tree.docs[id];
-      html += `<a class="doc-link${id === active ? ' active' : ''}" href="#/doc/${id}" style="padding-left:${pad + 20}px" title="${esc(d.file)}">${esc(d.file)}</a>`;
-    }
+    html += renderFolder(buildFolderTree(node.docs), node.key, '', depth + 1);
     for (const child of (node.children || [])) html += renderNode(child, depth + 1);
   }
   html += '</div>';
@@ -312,6 +389,11 @@ function expandToDoc(doc) {
       if (n.children && n.children.some((c) => c.key === key)) ensure(n.key);
     }
   }
+  // Open the folder chain leading to the doc.
+  const parts = (doc.file || '').split('/');
+  parts.pop();
+  let pre = '';
+  for (const seg of parts) { pre = pre ? pre + '/' + seg : seg; ensure(`folder:${key}:${pre}`); }
   if (changed) saveOpen();
 }
 
@@ -381,16 +463,23 @@ async function showDoc(id) {
 }
 
 /* ── dashboard ───────────────────────────────────────── */
+function dashItem(d) {
+  const dot = d.status ? `<span class="dot ${d.status}">●</span>` : '';
+  return `<a class="dash-item${d.status ? ' st-' + d.status : ''}" href="#/doc/${d.id}">
+    <div><div class="d-title">${dot}${esc(d.title)}</div>
+    <div class="d-sub">${esc(nodePathLabel(d.nodeKey))} · ${esc(d.file)}</div></div>
+    <div class="d-when">${ago(d.mtime)}</div>
+  </a>`;
+}
 function showDashboard() {
   openDoc = null;
+  const active = tree.docs.filter((d) => d.status === 'active').sort((a, b) => b.mtime - a.mtime).slice(0, 12);
   const recent = [...tree.docs].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
-  const items = recent.map((d) => `
-    <a class="dash-item" href="#/doc/${d.id}">
-      <div><div class="d-title">${esc(d.title)}</div>
-      <div class="d-sub">${esc(nodePathLabel(d.nodeKey))} · ${esc(d.file)}</div></div>
-      <div class="d-when">${ago(d.mtime)}</div>
-    </a>`).join('');
-  $content.innerHTML = `<h2>Recently updated</h2>${items || '<div class="empty">No planning documents found yet.</div>'}`;
+  const activeBlock = active.length
+    ? `<h2><span class="dot active">●</span> Active plans</h2>${active.map(dashItem).join('')}`
+    : '';
+  const recentBlock = `<h2>Recently updated</h2>${recent.map(dashItem).join('') || '<div class="empty">No planning documents found yet.</div>'}`;
+  $content.innerHTML = activeBlock + recentBlock;
   $toc.innerHTML = '';
   renderNav();
 }
