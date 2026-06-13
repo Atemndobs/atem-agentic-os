@@ -214,14 +214,27 @@ function resolveRepo(root, cache = new Map()) {
   return result;
 }
 
-function docTitle(absPath) {
+// Title + an optional status hint from a doc's head, in one read. The
+// hint comes from a YAML `status:` field or a bold `**Status:**` line —
+// the only reliable explicit signal; recency fills the rest.
+function docMeta(absPath) {
+  let title = path.basename(absPath);
+  let statusHint = null;
   try {
     const head = fs.readFileSync(absPath, 'utf8').slice(0, 2048);
-    const m = head.match(/^#\s+(.+)$/m);
-    if (m) return m[1].trim();
+    const tm = head.match(/^#\s+(.+)$/m);
+    if (tm) title = tm[1].trim();
+    const sm = head.match(/^\s*\**status:?\**\s*(.+)$/im);
+    if (sm) {
+      const v = sm[1].toLowerCase();
+      if (/(complete|done|executed|merged|shipped|archived|finished|closed)/.test(v)) statusHint = 'done';
+      else if (/(active|in[ -]?progress|wip|current|ongoing)/.test(v)) statusHint = 'active';
+    }
   } catch { /* fall through */ }
-  return path.basename(absPath);
+  return { title, statusHint };
 }
+
+function docTitle(absPath) { return docMeta(absPath).title; }
 
 function statMtime(p) {
   try { return fs.statSync(p).mtimeMs; } catch { return 0; }
@@ -242,12 +255,13 @@ function isDocSite(root, docsDir) {
 // projects, or just its planning-shaped subtrees when docs/ is a
 // published documentation site.
 function scanProjectDocs(root) {
-  const found = new Map(); // rel → {abs, rel, file, mtime, title}
+  const found = new Map(); // rel → {abs, rel, mtime, title, statusHint}
   const add = (abs) => {
     const rel = path.relative(root, abs);
     if (found.has(rel)) return;
     if (!fs.existsSync(abs)) return;
-    found.set(rel, { abs, rel, file: path.basename(abs), mtime: statMtime(abs), title: docTitle(abs) });
+    const { title, statusHint } = docMeta(abs);
+    found.set(rel, { abs, rel, mtime: statMtime(abs), title, statusHint });
   };
 
   const walkMd = (dir, depth) => {
@@ -276,6 +290,71 @@ function scanProjectDocs(root) {
   for (const rel of SINGLE_FILES) add(path.join(root, rel));
 
   return [...found.values()].sort((a, b) => a.rel.localeCompare(b.rel));
+}
+
+// ── plan status classification ─────────────────────────────────────────
+// The project's north-star doc (blue), the single newest plan/spec being
+// worked on (green), and older plans (orange). Everything else uncolored.
+const MAIN_BASENAMES = new Set(['action-plan.md', 'project.md', 'roadmap.md', 'plan.md', 'vision.md']);
+const PLAN_DIR_RE = /(^|\/)(superpowers\/(plans|specs)|sub-plans|plans|specs|\.planning\/plans)(\/|$)/;
+
+function isMainDoc(rel) {
+  return MAIN_BASENAMES.has(path.basename(rel).toLowerCase());
+}
+function isPlanDoc(rel) {
+  if (PLAN_DIR_RE.test(rel)) return true;
+  return /(plan|spec|design|roadmap)/.test(path.basename(rel).toLowerCase());
+}
+
+// Mutates each record, adding a `status` of 'main' | 'active' | 'done' | null.
+function classifyStatus(records) {
+  const plans = records.filter((d) => !isMainDoc(d.rel) && isPlanDoc(d.rel));
+  const auto = plans.filter((d) => !d.statusHint);
+  const activeRel = auto.length
+    ? auto.reduce((a, b) => (b.mtime > a.mtime ? b : a)).rel
+    : null;
+  for (const d of records) {
+    if (isMainDoc(d.rel)) d.status = d.statusHint === 'done' ? 'done' : 'main';
+    else if (isPlanDoc(d.rel)) d.status = d.statusHint || (d.rel === activeRel ? 'active' : 'done');
+    else d.status = null;
+  }
+  return records;
+}
+
+// Claude Code keeps per-project memory (including plans it authored) under
+// ~/.claude/projects/<encoded>/memory/. Map each repo realpath → its memory
+// dir so those hidden files can be surfaced alongside the repo's docs.
+function claudeMemoryByRoot(claudeProjectsDir) {
+  const map = new Map();
+  if (!isDir(claudeProjectsDir)) return map;
+  const cache = new Map();
+  const cachedListDir = (p) => {
+    if (!cache.has(p)) cache.set(p, defaultListDir(p));
+    return cache.get(p);
+  };
+  for (const name of fs.readdirSync(claudeProjectsDir)) {
+    const decoded = decodeClaudeProjectDir(name, cachedListDir);
+    if (!decoded) continue;
+    const memDir = path.join(claudeProjectsDir, name, 'memory');
+    if (!isDir(memDir)) continue;
+    let real = decoded;
+    try { real = fs.realpathSync(decoded); } catch { /* keep */ }
+    map.set(real, memDir);
+  }
+  return map;
+}
+
+function memoryRecords(memDir) {
+  const out = [];
+  let names = [];
+  try { names = fs.readdirSync(memDir); } catch { return out; }
+  for (const name of names) {
+    if (!name.endsWith('.md')) continue;
+    const abs = path.join(memDir, name);
+    const { title, statusHint } = docMeta(abs);
+    out.push({ abs, rel: `‹claude memory›/${name}`, mtime: statMtime(abs), title, statusHint });
+  }
+  return out;
 }
 
 function buildTree(opts = {}) {
@@ -329,11 +408,19 @@ function buildTree(opts = {}) {
     if (isWorktree) entry.worktrees.add(root);
   }
 
+  const claudeProjectsDir = opts.claudeProjectsDir
+    || process.env.ATEM_WEB_CLAUDE_PROJECTS_DIR
+    || path.join(os.homedir(), '.claude', 'projects');
+  const memByRoot = claudeMemoryByRoot(claudeProjectsDir);
+
   const scanIntoNode = (root, kind) => {
-    const projectDocs = scanProjectDocs(root);
+    const records = scanProjectDocs(root);
+    const memDir = memByRoot.get(realpath(root));
+    if (memDir) records.push(...memoryRecords(memDir));
+    classifyStatus(records);
     const nodeKey = kind === 'worktree' ? `worktree:${root}` : `project:${root}`;
-    const ids = projectDocs.map((d) => newDoc({
-      path: d.abs, file: d.rel, title: d.title, mtime: d.mtime, nodeKey, group: 'projects',
+    const ids = records.map((d) => newDoc({
+      path: d.abs, file: d.rel, title: d.title, mtime: d.mtime, status: d.status, nodeKey, group: 'projects',
     }));
     return { key: nodeKey, label: path.basename(root), root, kind, docs: ids };
   };

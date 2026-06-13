@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `atem web`: sidebar now renders a real nested **folder tree** (date-sorted,
+  newest first) instead of a flat path list; repos group their worktrees.
+- `atem web`: **status color-coding** — the project's north-star doc
+  (ROADMAP/PROJECT/action-plan/PLAN) is blue, the single most-recent plan/spec
+  is green (active), older plans orange (executed); honors a `status:`
+  frontmatter override. A dashboard "Active plans" section surfaces the green
+  ones first.
+- `atem web`: surfaces Claude Code's hidden per-project plans from
+  `~/.claude/projects/<proj>/memory/` under a `‹claude memory›` folder.
+
 - `atem web` — local planning viewer. Serves every agent's planning
   files as an interactive web app (`http://127.0.0.1:4400`): ATEM task
   files (brief/state/next/decisions/validation/log/handoff) plus the
