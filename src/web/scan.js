@@ -12,29 +12,46 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { getHandlesRoot } = require('../handles.js');
-const { PURPOSE_CANDIDATES, RESEARCH_DIRS, DECISION_DIRS } = require('../context.js');
+const { PURPOSE_CANDIDATES } = require('../context.js');
 
 const TASK_FILES = ['brief', 'state', 'next', 'decisions', 'validation', 'log', 'handoff'];
 
+// Root-level entry docs that live outside docs/ but are clearly planning.
 const SINGLE_FILES = [...new Set([
   ...PURPOSE_CANDIDATES,
   'PLAN.md',
   'AGENTS.md',
 ])];
 
-const SCAN_DIRS = [...new Set([
+// Always-planning holders, walked recursively regardless of project type.
+const ALWAYS_TREES = [
+  '.planning',
+  'ADR',
+  'adr',
+];
+
+// If docs/ is a published documentation SITE (Mintlify/MkDocs/Docusaurus),
+// showing all of it would flood the viewer with the site (and its
+// translations). Detect by config marker and fall back to planning-only.
+const DOC_SITE_MARKERS = [
+  'docs.json',          // Mintlify
+  'mint.json',          // Mintlify (legacy)
+  'mkdocs.yml',         // MkDocs
+  'mkdocs.yaml',
+  'docusaurus.config.js',
+  'docusaurus.config.ts',
+  'docusaurus.config.mjs',
+];
+
+// Planning-shaped subtrees inside a docs/ that is otherwise a doc-site.
+const DOCS_PLANNING_SUBTREES = [
+  'docs/superpowers',
   'docs/sub-plans',
   'docs/plans',
   'docs/specs',
-  ...RESEARCH_DIRS,
-  ...DECISION_DIRS,
-])];
-
-// Walked recursively (specs/, plans/, and any future subdirs). This is
-// where the brainstorming + writing-plans skills save designs and plans.
-const SCAN_TREES = [
-  '.planning',
-  'docs/superpowers',
+  'docs/research',
+  'docs/decisions',
+  'docs/adr',
 ];
 
 function isDir(p) {
@@ -182,8 +199,20 @@ function statMtime(p) {
   try { return fs.statSync(p).mtimeMs; } catch { return 0; }
 }
 
-// All planning docs of one project root: .planning/** plus the
-// authoritative single files and category dirs from the spec.
+// A docs/ is a published doc-site if a generator config sits in it or at
+// the repo root.
+function isDocSite(root, docsDir) {
+  for (const marker of DOC_SITE_MARKERS) {
+    if (fs.existsSync(path.join(docsDir, marker))) return true;
+    if (fs.existsSync(path.join(root, marker))) return true;
+  }
+  return false;
+}
+
+// All planning docs of one project root: .planning/ + root ADR dirs +
+// root entry files, plus docs/ — the whole docs/ holder for normal
+// projects, or just its planning-shaped subtrees when docs/ is a
+// published documentation site.
 function scanProjectDocs(root) {
   const found = new Map(); // rel → {abs, rel, file, mtime, title}
   const add = (abs) => {
@@ -205,14 +234,17 @@ function scanProjectDocs(root) {
     }
   };
 
-  for (const tree of SCAN_TREES) walkMd(path.join(root, tree), 0);
-  for (const dir of SCAN_DIRS) {
-    const full = path.join(root, dir);
-    if (!isDir(full)) continue;
-    for (const name of fs.readdirSync(full)) {
-      if (name.endsWith('.md')) add(path.join(full, name));
+  for (const tree of ALWAYS_TREES) walkMd(path.join(root, tree), 0);
+
+  const docsDir = path.join(root, 'docs');
+  if (isDir(docsDir)) {
+    if (isDocSite(root, docsDir)) {
+      for (const sub of DOCS_PLANNING_SUBTREES) walkMd(path.join(root, sub), 0);
+    } else {
+      walkMd(docsDir, 0);
     }
   }
+
   for (const rel of SINGLE_FILES) add(path.join(root, rel));
 
   return [...found.values()].sort((a, b) => a.rel.localeCompare(b.rel));

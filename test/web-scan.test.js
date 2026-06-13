@@ -36,6 +36,10 @@ function makeFixture() {
   fs.mkdirSync(path.join(proj, 'docs', 'superpowers', 'plans'), { recursive: true });
   fs.writeFileSync(path.join(proj, 'docs', 'superpowers', 'specs', '2026-01-01-feature-design.md'), '# Feature Design\n');
   fs.writeFileSync(path.join(proj, 'docs', 'superpowers', 'plans', '2026-01-01-feature.md'), '# Feature Plan\n');
+  // plain docs/ files outside any "planning" subdir — must still appear
+  fs.writeFileSync(path.join(proj, 'docs', 'guide.md'), '# Guide\n');
+  fs.mkdirSync(path.join(proj, 'docs', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'docs', 'architecture', 'overview.md'), '# Overview\n');
 
   // A project with NO planning docs (must be omitted)
   const bare = path.join(root, 'projects', 'bare');
@@ -127,7 +131,7 @@ test('provider derived from handle prefix; bare TASK ids have provider null', ()
   assert.equal(tasks.nodes.find((n) => n.label === 'TASK-001').provider, null);
 });
 
-test('project scan finds .planning/**, PLAN.md, AGENTS.md, docs/sub-plans, uncapped', () => {
+test('project scan shows all of docs/ and .planning/ plus root entry files', () => {
   const fx = makeFixture();
   const found = scanProjectDocs(fx.proj).map((d) => d.rel).sort();
   assert.deepEqual(found, [
@@ -135,10 +139,48 @@ test('project scan finds .planning/**, PLAN.md, AGENTS.md, docs/sub-plans, uncap
     '.planning/research/notes.md',
     'AGENTS.md',
     'PLAN.md',
+    'docs/architecture/overview.md',
+    'docs/guide.md',
     'docs/sub-plans/sub-plan-1.md',
     'docs/superpowers/specs/2026-01-01-feature-design.md',
     'docs/superpowers/plans/2026-01-01-feature.md',
   ].sort());
+});
+
+test('doc-site projects show only planning-shaped docs/ files, not the whole site', () => {
+  const root = tmpdir('atem-web-docsite-');
+  const proj = path.join(root, 'beta');
+  fs.mkdirSync(path.join(proj, 'docs', 'reference'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'docs', 'zh-CN'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'docs', 'superpowers', 'plans'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'docs', 'research'), { recursive: true });
+  fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'docs', 'docs.json'), '{}'); // Mintlify doc-site marker
+  fs.writeFileSync(path.join(proj, 'docs', 'index.md'), '# Home\n');             // excluded
+  fs.writeFileSync(path.join(proj, 'docs', 'reference', 'api.md'), '# API\n');   // excluded
+  fs.writeFileSync(path.join(proj, 'docs', 'zh-CN', 'index.md'), '# Home zh\n'); // excluded
+  fs.writeFileSync(path.join(proj, 'docs', 'superpowers', 'plans', 'p.md'), '# Plan\n'); // included
+  fs.writeFileSync(path.join(proj, 'docs', 'research', 'r.md'), '# Research\n');          // included
+  fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), '# RM\n');                 // included
+  fs.writeFileSync(path.join(proj, 'AGENTS.md'), '# Agents\n');                           // included
+  const found = scanProjectDocs(proj).map((d) => d.rel).sort();
+  assert.deepEqual(found, [
+    '.planning/ROADMAP.md',
+    'AGENTS.md',
+    'docs/research/r.md',
+    'docs/superpowers/plans/p.md',
+  ].sort());
+});
+
+test('mkdocs.yml at repo root also marks a doc-site', () => {
+  const root = tmpdir('atem-web-mkdocs-');
+  const proj = path.join(root, 'gamma');
+  fs.mkdirSync(path.join(proj, 'docs', 'guide'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'mkdocs.yml'), 'site_name: x\n');
+  fs.writeFileSync(path.join(proj, 'docs', 'guide', 'page.md'), '# Page\n'); // excluded
+  fs.writeFileSync(path.join(proj, 'docs', 'action-plan.md'), '# Plan\n');   // included (named)
+  const found = scanProjectDocs(proj).map((d) => d.rel).sort();
+  assert.deepEqual(found, ['docs/action-plan.md']);
 });
 
 test('projects discovered via claude registry and codex sessions; no-doc projects omitted', () => {
