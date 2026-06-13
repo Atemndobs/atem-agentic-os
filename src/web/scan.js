@@ -24,9 +24,18 @@ const SINGLE_FILES = [...new Set([
 
 const SCAN_DIRS = [...new Set([
   'docs/sub-plans',
+  'docs/plans',
+  'docs/specs',
   ...RESEARCH_DIRS,
   ...DECISION_DIRS,
 ])];
+
+// Walked recursively (specs/, plans/, and any future subdirs). This is
+// where the brainstorming + writing-plans skills save designs and plans.
+const SCAN_TREES = [
+  '.planning',
+  'docs/superpowers',
+];
 
 function isDir(p) {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
@@ -196,7 +205,7 @@ function scanProjectDocs(root) {
     }
   };
 
-  walkMd(path.join(root, '.planning'), 0);
+  for (const tree of SCAN_TREES) walkMd(path.join(root, tree), 0);
   for (const dir of SCAN_DIRS) {
     const full = path.join(root, dir);
     if (!isDir(full)) continue;
