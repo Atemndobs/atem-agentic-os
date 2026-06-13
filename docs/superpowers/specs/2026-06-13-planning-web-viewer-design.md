@@ -38,7 +38,13 @@ src/web/
 Returns a tree of documents from both sources:
 
 - **Tasks group:** every session directory under `~/.atem/harness/sessions/`, using existing `src/handles.js` (`listHandles()`) and `src/adapters/session.js` helpers, **excluding `_archive/`** (same convention as `src/recovery.js`). Each task exposes its seven canonical markdown files. Provider (claude-code, codex, …) is derived from the handle name prefix; ids without a provider prefix (e.g. `TASK-002`) get no provider badge.
-- **Projects group:** the union of repos referenced by any task (`session.listRepos(taskId)`) plus the current working repo. Each repo is scanned for planning docs reusing the path constants already exported by `src/context.js` — listing **all** matching markdown files, without the `MAX_PLANS` cap. Authoritative scan list: `.planning/**/*.md`, `docs/sub-plans/*.md`, the research and decisions dirs from `context.js` constants (`docs/research/`, `docs/decisions/`, `.planning/research/`, `.planning/decisions/` — already covered by `.planning/**`), `docs/PLAN.md`, `docs/action-plan.md`, `PLAN.md`, `AGENTS.md`.
+- **Projects group:** ALL projects any agent has worked on on this machine, regardless of location (user requirement, 2026-06-13). Project roots are discovered from the agents' own registries — no full-disk scanning:
+  - **ATEM:** repos referenced by any task (`session.listRepos(taskId)`).
+  - **Claude Code:** `~/.claude/projects/` directory names, which encode absolute paths with dashes. Decoding is ambiguous (literal dashes vs path separators), so the decoder reconstructs paths greedily by checking filesystem existence; undecodable entries are skipped.
+  - **Codex:** `cwd` from the `session_meta` first line of each `~/.codex/sessions/YYYY/MM/DD/*.jsonl` file.
+  - Plus the current working repo.
+
+  Roots are deduplicated via realpath; non-existent paths and paths under `/tmp`/`/private/tmp` are skipped; projects with no planning docs are omitted from the tree. Each surviving root is scanned for planning docs reusing the path constants already exported by `src/context.js` — listing **all** matching markdown files, without the `MAX_PLANS` cap. Authoritative scan list: `.planning/**/*.md`, `docs/sub-plans/*.md`, the research and decisions dirs from `context.js` constants (`docs/research/`, `docs/decisions/`, `.planning/research/`, `.planning/decisions/` — already covered by `.planning/**`), `docs/PLAN.md`, `docs/action-plan.md`, `PLAN.md`, `AGENTS.md`.
 
 Every document gets an opaque numeric id (its index in the scanned list). Ids are stable within one scan generation; after a rescan (live reload), the client re-resolves its open document via the refetched tree using the server-provided node/filename keys — a rescan must never silently swap the displayed document. Missing directories and unreadable repos are skipped silently.
 
