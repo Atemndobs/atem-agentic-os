@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
+const { whichSync } = require('../which.js');
 
 const DEFAULT_BIN_CANDIDATES = [
   '/Applications/Codex.app/Contents/Resources/codex',
@@ -27,13 +28,7 @@ function findCodexBinary() {
   for (const candidate of DEFAULT_BIN_CANDIDATES) {
     if (fs.existsSync(candidate)) return candidate;
   }
-  try {
-    const out = execFileSync('which', ['codex'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const trimmed = out.trim();
-    return trimmed || null;
-  } catch {
-    return null;
-  }
+  return whichSync('codex');
 }
 
 // --- Newline-delimited JSON-RPC over stdio ---------------------------------

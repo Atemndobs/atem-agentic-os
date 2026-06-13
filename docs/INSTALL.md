@@ -21,7 +21,7 @@ On the source machine, build the bundle:
 
 ```sh
 cd atem-agentic-os
-npm pack          # → atem-agentic-os-0.2.0.tgz
+npm pack          # → atem-agentic-os-0.2.1.tgz
 ```
 
 Copy that one `.tgz` file to the target machine (USB, Slack, scp, whatever),
@@ -29,9 +29,9 @@ then install it globally:
 
 ```sh
 # macOS / Linux
-npm install -g ./atem-agentic-os-0.2.0.tgz
+npm install -g ./atem-agentic-os-0.2.1.tgz
 # Windows (PowerShell or cmd)
-npm install -g .\atem-agentic-os-0.2.0.tgz
+npm install -g .\atem-agentic-os-0.2.1.tgz
 ```
 
 ### Option B — straight from GitHub (needs repo access)
@@ -39,7 +39,7 @@ npm install -g .\atem-agentic-os-0.2.0.tgz
 ```sh
 npm install -g github:Atemndobs/atem-agentic-os
 # or a pinned release:
-npm install -g github:Atemndobs/atem-agentic-os#v0.2.0
+npm install -g github:Atemndobs/atem-agentic-os#v0.2.1
 ```
 
 Either way you now have a global `atem` command:
@@ -75,15 +75,17 @@ change the port). It scans this machine's own `~/.claude`, `~/.codex`, and
 `~/.atem` — so it shows that machine's projects, worktrees, hand-offs, and
 plans.
 
-## Windows notes
+## Windows notes (v0.2.1+)
 
-- **Symlink-based hand-off scaffolding** (`~/.atem/handles/`) needs either
-  **Developer Mode** enabled (Settings → Privacy & security → For developers)
-  or running the shell as Administrator, because Windows restricts symlink
-  creation. The `atem web` viewer and the MCP handoff tools that don't rely on
-  the symlink farm work without it.
-- **Live session detection** in `atem status` uses `ps`/`lsof` and is degraded
-  on Windows; the MCP tools and `atem web` do not depend on it.
+- **Hand-off scaffolding** (`~/.atem/handles/`) works without Administrator or
+  Developer Mode: where Windows denies symlinks, ATEM falls back to a junction
+  (directories) or a hard link (files), both of which stay live. If you *do*
+  enable Developer Mode you'll get real symlinks, but it isn't required.
+- **Provider detection** (`codex`, `claude`, `cursor`, `opencode`) uses `where`
+  on Windows, so installed CLIs are found normally.
+- **Live session detection** in `atem status` uses `ps`/`lsof`, which don't
+  exist on Windows — that one view is degraded, but it never errors, and the
+  MCP handoff tools and `atem web` don't depend on it.
 
 ## Updating later
 

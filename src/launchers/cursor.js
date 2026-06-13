@@ -19,23 +19,15 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { spawn } = require('node:child_process');
+const { whichSync } = require('../which.js');
 
 const CURSORRULES_BEGIN = '<!-- atem:cursorrules:begin -->';
 const CURSORRULES_END = '<!-- atem:cursorrules:end -->';
 
 function whichCursor() {
   if (process.env.ATEM_CURSOR_BIN) return process.env.ATEM_CURSOR_BIN;
-  try {
-    const out = execFileSync('which', ['cursor'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const trimmed = out.trim();
-    return trimmed || null;
-  } catch {
-    return null;
-  }
+  return whichSync('cursor');
 }
 
 // Build the ATEM block we drop into `.cursorrules`. Mirrors the

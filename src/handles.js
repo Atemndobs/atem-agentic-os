@@ -17,6 +17,11 @@ function getHandlesRoot() {
   return process.env.ATEM_HANDLES_DIR || path.join(os.homedir(), '.atem', 'handles');
 }
 
+// Create `link` pointing at `target`. Prefers a real symlink; on Windows,
+// where symlink creation needs Administrator / Developer Mode, it falls
+// back to a junction for directories and a hard link for files — both of
+// which need no special privilege and stay live (reflect the canonical
+// file), unlike a copy. Returns true if it (re)created the link.
 function ensureSymlink(target, link) {
   // Remove anything at link path that isn't already the correct symlink.
   try {
@@ -29,7 +34,21 @@ function ensureSymlink(target, link) {
       try { fs.rmSync(link, { force: true, recursive: true }); } catch { /* ignore */ }
     }
   }
-  fs.symlinkSync(target, link);
+  const isDir = (() => { try { return fs.statSync(target).isDirectory(); } catch { return false; } })();
+  try {
+    // `type` is ignored on POSIX; on Windows 'junction' avoids the symlink
+    // privilege requirement for directories.
+    fs.symlinkSync(target, link, isDir ? 'junction' : 'file');
+  } catch (e) {
+    if (e.code === 'EPERM' || e.code === 'EACCES') {
+      // Windows without symlink privilege: junction (dir) or hard link (file).
+      try { fs.rmSync(link, { force: true, recursive: true }); } catch { /* ignore */ }
+      if (isDir) fs.symlinkSync(target, link, 'junction');
+      else fs.linkSync(target, link);
+    } else {
+      throw e;
+    }
+  }
   return true;
 }
 
