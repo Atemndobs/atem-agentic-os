@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { whichSync } = require('../which.js');
 
 // ---- path resolution ----------------------------------------------------
 
@@ -22,16 +23,7 @@ function getDbPath() {
 
 function whichOpencode() {
   if (process.env.ATEM_OPENCODE_BIN) return process.env.ATEM_OPENCODE_BIN;
-  try {
-    const out = execFileSync('which', ['opencode'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const trimmed = out.trim();
-    return trimmed || null;
-  } catch {
-    return null;
-  }
+  return whichSync('opencode');
 }
 
 // ---- sqlite helpers -----------------------------------------------------

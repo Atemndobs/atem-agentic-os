@@ -8,17 +8,12 @@
 // outlives ATEM's CLI exit.
 
 const fs = require('node:fs');
-const { execFileSync, spawn } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const synthetic = require('../synthetic.js');
+const { whichSync } = require('../which.js');
 
 function whichClaude() {
-  try {
-    const out = execFileSync('which', ['claude'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const trimmed = out.trim();
-    return trimmed || null;
-  } catch {
-    return null;
-  }
+  return whichSync('claude');
 }
 
 function makeClaudeCodeLauncher({ spawnFn = spawn, whichFn = whichClaude } = {}) {

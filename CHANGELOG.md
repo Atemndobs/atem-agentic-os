@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.1 — 2026-06-13
+
+Windows hardening for team installs:
+
+- Binary detection (`codex`, `claude`, `cursor`, `opencode`) now uses a
+  cross-platform `whichSync` — `where` on Windows, `which` elsewhere — so
+  providers are actually found on Windows.
+- The handle farm (`~/.atem/handles/`) falls back from symlink to a
+  **junction** (directories) or **hard link** (files) when Windows denies
+  symlink creation (no Administrator / Developer Mode needed); hard links
+  stay live, unlike a copy.
+- Everything else that shells out to Unix tools (`ps`, `lsof`, `sqlite3`)
+  already degrades gracefully — confirmed it never crashes on Windows.
+
 ## v0.2.0 — 2026-06-13
 
 Adds the `atem web` planning viewer and makes ATEM installable on other
