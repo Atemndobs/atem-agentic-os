@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `atem web` — local planning viewer. Serves every agent's planning
+  files as an interactive web app (`http://127.0.0.1:4400`): ATEM task
+  files (brief/state/next/decisions/validation/log/handoff) plus the
+  planning docs (`.planning/`, `PLAN.md`, `AGENTS.md`, sub-plans,
+  research, decisions) of every project on this machine, discovered via
+  the Claude Code, Codex, and ATEM registries. Zero-dependency:
+  in-repo markdown renderer, hash-routed SPA, full-text search,
+  fs.watch + SSE live reload. Localhost only.
+
 ## v0.1.0 — 2026-06-03
 
 First public version. Every workstream marked as **plumbing** in the
