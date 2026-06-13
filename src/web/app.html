@@ -123,8 +123,11 @@ body {
   border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px;
   background: var(--bg); color: var(--fg);
 }
-.result { display: block; padding: 6px; border-radius: 6px; text-decoration: none; color: var(--fg); }
+.result { display: block; padding: 6px; border-radius: 6px; text-decoration: none; color: var(--fg); cursor: pointer; }
 .result:hover { background: var(--accent-bg); }
+.node-result .r-title::before { content: '⮕ '; color: var(--muted); }
+.node-label.flash { animation: flash 1.2s ease; }
+@keyframes flash { 0%, 40% { background: var(--accent-bg); } 100% { background: transparent; } }
 .result .r-title { font-size: 13px; font-weight: 600; }
 .result .r-snippet { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -456,20 +459,76 @@ function renderNav() {
 }
 
 /* ── search ──────────────────────────────────────────── */
+// Match project / worktree / handoff node names (client-side — the tree
+// is already loaded). Returns [{node, context}] where context is the
+// parent repo label for nested nodes.
+function searchNodes(ql) {
+  const out = [];
+  const kindRank = { repo: 0, worktree: 1, task: 2 };
+  const walk = (nodes, repoLabel) => {
+    for (const n of nodes) {
+      if (matchesAny(config.hideProjects, n.label)) continue;
+      if ((n.kind === 'task' && !config.showTasks) || (n.kind === 'worktree' && !config.showWorktrees)) {
+        // hidden by config — skip it and its descendants
+      } else {
+        if (n.label.toLowerCase().includes(ql)) out.push({ node: n, context: repoLabel });
+        if (n.children) walk(n.children, n.kind === 'repo' ? n.label : repoLabel);
+      }
+    }
+  };
+  for (const g of tree.groups) walk(g.nodes, null);
+  out.sort((a, b) => (kindRank[a.node.kind] - kindRank[b.node.kind]) || a.node.label.localeCompare(b.node.label));
+  return out.slice(0, 20);
+}
+
+// Reveal a node in the sidebar: open its ancestor chain, re-render, scroll to it.
+function jumpToNode(key) {
+  $search.value = '';
+  open.add('group:projects');
+  for (const g of tree.groups) for (const n of g.nodes) {
+    if (n.key === key) { open.add(n.key); }
+    else if (n.children) for (const c of n.children) {
+      if (c.key === key) { open.add(n.key); open.add(c.key); }
+    }
+  }
+  saveOpen();
+  renderNav();
+  const el = [...$nav.querySelectorAll('[data-toggle]')].find((e) => e.getAttribute('data-toggle') === key);
+  if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200); }
+}
+
 let searchTimer = null;
 $search.addEventListener('input', () => {
   clearTimeout(searchTimer);
   const q = $search.value.trim();
   if (!q) { renderNav(); return; }
   searchTimer = setTimeout(async () => {
+    const ql = q.toLowerCase();
+    const nodes = searchNodes(ql);
     const out = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+    const docResults = out.results.filter((r) => docVisible(tree.docs[r.id]));
     let html = '';
-    for (const r of out.results.filter((r) => docVisible(tree.docs[r.id]))) {
-      html += `<a class="result" href="#/doc/${r.id}">
-        <div class="r-title">${esc(r.title)} <span style="color:var(--muted);font-weight:400">· ${esc(r.file)}</span></div>
-        <div class="r-snippet">${esc(r.snippet)}</div></a>`;
+    if (nodes.length) {
+      html += '<div class="group-title">Projects &amp; tasks</div>';
+      for (const { node, context } of nodes) {
+        const kind = node.kind === 'task' ? 'handoff' : node.kind === 'worktree' ? 'worktree' : 'project';
+        html += `<div class="result node-result" role="button" tabindex="0" data-jump="${esc(node.key)}">
+          <div class="r-title">${esc(node.label)} <span style="color:var(--muted);font-weight:400">· ${kind}${context ? ' in ' + esc(context) : ''}</span></div></div>`;
+      }
+    }
+    if (docResults.length) {
+      html += '<div class="group-title">Documents</div>';
+      for (const r of docResults) {
+        html += `<a class="result" href="#/doc/${r.id}">
+          <div class="r-title">${esc(r.title)} <span style="color:var(--muted);font-weight:400">· ${esc(r.file)}</span></div>
+          <div class="r-snippet">${esc(r.snippet)}</div></a>`;
+      }
     }
     $nav.innerHTML = html || '<div class="group-title">No matches</div>';
+    for (const el of $nav.querySelectorAll('[data-jump]')) {
+      el.addEventListener('click', () => jumpToNode(el.getAttribute('data-jump')));
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') jumpToNode(el.getAttribute('data-jump')); });
+    }
   }, 150);
 });
 

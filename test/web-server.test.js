@@ -67,6 +67,8 @@ test('SPA shell contains router, SSE, search, and persistence wiring', async (t)
   assert.match(html, /\/api\/config/, 'config wiring');
   assert.match(html, /enhanceCodeBlocks/, 'collapsible code');
   assert.match(html, /enhanceHeadings/, 'foldable sections');
+  assert.match(html, /searchNodes/, 'search matches project/task names');
+  assert.match(html, /jumpToNode/, 'jump-to-node from search');
 });
 
 test('GET /api/tree returns groups + generation', async (t) => {
