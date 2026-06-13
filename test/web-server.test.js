@@ -9,16 +9,25 @@ const { TASK_FILES } = require('../src/web/scan.js');
 
 function makeFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atem-web-srv-'));
+  const proj = path.join(root, 'projects', 'alpha');
   const handles = path.join(root, 'handles');
   const dir = path.join(handles, 'TASK-001');
   fs.mkdirSync(dir, { recursive: true });
   for (const f of TASK_FILES) {
-    fs.writeFileSync(path.join(dir, `${f}.md`), `---\nstatus: active\n---\n# ${f} heading\n\nbody of ${f} searchterm-${f}\n`);
+    const fm = f === 'state' ? `status: active\nrepo: ${proj}` : 'status: active';
+    fs.writeFileSync(path.join(dir, `${f}.md`), `---\n${fm}\n---\n# ${f} heading\n\nbody of ${f} searchterm-${f}\n`);
   }
-  const proj = path.join(root, 'projects', 'alpha');
   fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
   fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), '# Alpha Roadmap\n\nunique-roadmap-term\n');
   return { root, handles, proj };
+}
+
+// The single project node and its nested task child, for the fixture above.
+function alphaNode(tree) {
+  return tree.groups.find((g) => g.kind === 'projects').nodes[0];
+}
+function alphaTask(tree) {
+  return (alphaNode(tree).children || []).find((c) => c.kind === 'task');
 }
 
 async function startApp(fx, extra = {}) {
@@ -66,10 +75,10 @@ test('GET /api/tree returns groups + generation', async (t) => {
   t.after(() => app.close());
   const tree = await (await fetch(base + '/api/tree')).json();
   assert.ok(typeof tree.generation === 'number');
-  assert.equal(tree.groups.length, 2);
-  assert.equal(tree.groups[0].kind, 'tasks');
-  assert.equal(tree.groups[0].nodes[0].label, 'TASK-001');
-  assert.equal(tree.groups[1].nodes[0].label, 'alpha');
+  assert.equal(tree.groups.length, 1);
+  assert.equal(tree.groups[0].kind, 'projects');
+  assert.equal(alphaNode(tree).label, 'alpha');
+  assert.equal(alphaTask(tree).label, 'TASK-001'); // task nested under its project
 });
 
 test('GET /api/doc returns rendered html, raw, frontmatter, path, mtime', async (t) => {
@@ -77,7 +86,7 @@ test('GET /api/doc returns rendered html, raw, frontmatter, path, mtime', async 
   const { app, base } = await startApp(fx);
   t.after(() => app.close());
   const tree = await (await fetch(base + '/api/tree')).json();
-  const id = tree.groups[0].nodes[0].docs[0];
+  const id = alphaTask(tree).docs[0];
   const doc = await (await fetch(`${base}/api/doc?id=${id}`)).json();
   assert.match(doc.html, /<h1 id="[^"]*">.*heading<\/h1>/);
   assert.match(doc.raw, /# brief heading/);
@@ -207,7 +216,7 @@ test('rescan picks up new files; docs re-resolvable by nodeKey+file', async (t) 
   app.rescan();
   const after = await (await fetch(base + '/api/tree')).json();
   assert.ok(after.generation > before.generation);
-  const node = after.groups[1].nodes.find((n) => n.key === `project:${fs.realpathSync(fx.proj)}`);
+  const node = after.groups[0].nodes.find((n) => n.key === `project:${fs.realpathSync(fx.proj)}`);
   const extra = node.docs.map((i) => after.docs[i]).find((d) => d.file === '.planning/EXTRA.md');
   assert.ok(extra, 'new doc present after rescan');
 });

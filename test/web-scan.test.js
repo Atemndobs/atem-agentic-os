@@ -13,17 +13,21 @@ function tmpdir(prefix) {
 function makeFixture() {
   const root = tmpdir('atem-web-scan-');
   // ATEM handles: two tasks + _archive + current symlink
+  const proj = path.join(root, 'projects', 'alpha');
   const handles = path.join(root, 'handles');
   for (const task of ['TASK-001', 'claude-code:abc123']) {
     const dir = path.join(handles, task);
     fs.mkdirSync(dir, { recursive: true });
-    for (const f of TASK_FILES) fs.writeFileSync(path.join(dir, `${f}.md`), `# ${f} of ${task}\n`);
+    for (const f of TASK_FILES) {
+      const body = f === 'state' ? `---\nrepo: ${proj}\n---\n# ${f} of ${task}\n` : `# ${f} of ${task}\n`;
+      fs.writeFileSync(path.join(dir, `${f}.md`), body);
+    }
   }
   fs.mkdirSync(path.join(handles, '_archive', 'TASK-OLD'), { recursive: true });
   fs.symlinkSync(path.join(handles, 'TASK-001'), path.join(handles, 'current'));
 
-  // A project with planning docs
-  const proj = path.join(root, 'projects', 'alpha');
+  // A project with planning docs (the tasks above target it)
+  fs.mkdirSync(proj, { recursive: true });
   fs.mkdirSync(path.join(proj, '.planning', 'research'), { recursive: true });
   fs.mkdirSync(path.join(proj, 'docs', 'sub-plans'), { recursive: true });
   fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), '# Alpha Roadmap\n');
@@ -104,11 +108,18 @@ test('decodeClaudeProjectDir is fast on undecodable many-dash names', () => {
   assert.ok(Date.now() - start < 100, 'must fail fast, not explore 3^n states');
 });
 
-test('buildTree lists tasks excluding _archive and current', () => {
+function alphaTasks(fx) {
+  const { groups } = buildTree(opts(fx, { extraRoots: [fx.proj] }));
+  const proj = groups.find((g) => g.kind === 'projects').nodes
+    .find((n) => n.root === fs.realpathSync(fx.proj));
+  return (proj.children || []).filter((c) => c.kind === 'task');
+}
+
+test('tasks nest under their project; no standalone Tasks group; _archive/current excluded', () => {
   const fx = makeFixture();
-  const { groups } = buildTree(opts(fx));
-  const tasks = groups.find((g) => g.kind === 'tasks');
-  const names = tasks.nodes.map((n) => n.label);
+  const { groups } = buildTree(opts(fx, { extraRoots: [fx.proj] }));
+  assert.equal(groups.some((g) => g.kind === 'tasks'), false);
+  const names = alphaTasks(fx).map((n) => n.label);
   assert.ok(names.includes('TASK-001'));
   assert.ok(names.includes('claude-code:abc123'));
   assert.ok(!names.some((n) => n.includes('_archive') || n === 'current' || n.includes('TASK-OLD')));
@@ -116,19 +127,17 @@ test('buildTree lists tasks excluding _archive and current', () => {
 
 test('task docs are the seven canonical files in stable order', () => {
   const fx = makeFixture();
-  const { docs, groups } = buildTree(opts(fx));
-  const tasks = groups.find((g) => g.kind === 'tasks');
-  const node = tasks.nodes.find((n) => n.label === 'TASK-001');
+  const { docs } = buildTree(opts(fx, { extraRoots: [fx.proj] }));
+  const node = alphaTasks(fx).find((n) => n.label === 'TASK-001');
   const files = node.docs.map((id) => docs[id].file);
   assert.deepEqual(files, TASK_FILES.map((f) => `${f}.md`));
 });
 
 test('provider derived from handle prefix; bare TASK ids have provider null', () => {
   const fx = makeFixture();
-  const { groups } = buildTree(opts(fx));
-  const tasks = groups.find((g) => g.kind === 'tasks');
-  assert.equal(tasks.nodes.find((n) => n.label === 'claude-code:abc123').provider, 'claude-code');
-  assert.equal(tasks.nodes.find((n) => n.label === 'TASK-001').provider, null);
+  const tasks = alphaTasks(fx);
+  assert.equal(tasks.find((n) => n.label === 'claude-code:abc123').provider, 'claude-code');
+  assert.equal(tasks.find((n) => n.label === 'TASK-001').provider, null);
 });
 
 test('project scan shows all of docs/ and .planning/ plus root entry files', () => {
@@ -145,6 +154,53 @@ test('project scan shows all of docs/ and .planning/ plus root entry files', () 
     'docs/superpowers/specs/2026-01-01-feature-design.md',
     'docs/superpowers/plans/2026-01-01-feature.md',
   ].sort());
+});
+
+test('hand-off tasks nest under their project; no standalone Tasks group; orphans dropped', () => {
+  const root = tmpdir('atem-web-tasknest-');
+  const repo = path.join(root, 'myrepo');
+  fs.mkdirSync(path.join(repo, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+
+  const handles = path.join(root, 'handles');
+  const mkTask = (id, repoLine) => {
+    const dir = path.join(handles, id);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of TASK_FILES) {
+      const body = f === 'state'
+        ? `---\ntask_id: ${id}\n${repoLine}\n---\n# State\n`
+        : `# ${f}\n`;
+      fs.writeFileSync(path.join(dir, `${f}.md`), body);
+    }
+  };
+  mkTask('claude-code:abc', `repo: ${repo}`);
+  mkTask('TASK-orphan', 'repo: unknown');
+
+  const tree = buildTree({
+    handlesDir: handles,
+    claudeProjectsDir: path.join(root, 'no-claude'),
+    codexSessionsDir: path.join(root, 'no-codex'),
+    extraRoots: [repo],
+  });
+
+  // no standalone tasks group
+  assert.equal(tree.groups.some((g) => g.kind === 'tasks'), false);
+  const projects = tree.groups.find((g) => g.kind === 'projects');
+  const repoNode = projects.nodes.find((n) => n.root === fs.realpathSync(repo));
+  assert.ok(repoNode, 'project node exists');
+
+  // the task nests under the project as a kind:task child
+  const taskChild = (repoNode.children || []).find((c) => c.kind === 'task');
+  assert.ok(taskChild, 'task nested under project');
+  assert.equal(taskChild.key, 'task:claude-code:abc');
+  assert.equal(taskChild.provider, 'claude-code');
+  assert.equal(taskChild.docs.length, TASK_FILES.length);
+
+  // orphan task (repo: unknown) is not shown anywhere
+  const everyKey = [];
+  const walk = (nodes) => nodes.forEach((n) => { everyKey.push(n.key); if (n.children) walk(n.children); });
+  walk(projects.nodes);
+  assert.ok(!everyKey.some((k) => k.includes('TASK-orphan')), 'orphan task dropped');
 });
 
 test('worktrees nest under their parent repo, each carrying its own docs', () => {

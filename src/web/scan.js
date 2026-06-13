@@ -140,6 +140,21 @@ function listTaskIds(handlesDir) {
     .map((e) => e.name);
 }
 
+// The repo a hand-off task targets, read straight from its state.md
+// (frontmatter or body). Covers target_repo / repo / cwd across the
+// provider variants. Returns null when unknown.
+function taskRepo(handlesDir, taskId) {
+  try {
+    const state = fs.readFileSync(path.join(handlesDir, taskId, 'state.md'), 'utf8');
+    const m = state.match(/^\s*(?:target_repo|repo|cwd):\s*(.+?)\s*$/im);
+    if (m) {
+      const p = m[1].trim();
+      if (p && p !== 'unknown') return p;
+    }
+  } catch { /* no state / unreadable */ }
+  return null;
+}
+
 function atemTaskRepos(taskIds) {
   const repos = [];
   let session;
@@ -366,9 +381,12 @@ function buildTree(opts = {}) {
     return id;
   };
 
-  // Tasks group
+  // Hand-off tasks belong to the project they were run in, so they nest
+  // under that project — there is no standalone Tasks group. Build a task
+  // node per task (its 7 canonical files), tagged with the repo it targets.
+  const realpath = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
   const taskIds = listTaskIds(handlesDir);
-  const taskNodes = [];
+  const taskNodes = []; // { node, repo } — repo = realpath of the task's target, or null
   for (const taskId of taskIds) {
     const dir = path.join(handlesDir, taskId);
     const nodeKey = `task:${taskId}`;
@@ -378,23 +396,27 @@ function buildTree(opts = {}) {
       if (!fs.existsSync(abs)) continue;
       ids.push(newDoc({
         path: abs, file: `${f}.md`, title: docTitle(abs),
-        mtime: statMtime(abs), nodeKey, group: 'tasks',
+        mtime: statMtime(abs), nodeKey, group: 'projects',
       }));
     }
-    if (!ids.length) continue;
+    if (!ids.length) continue; // broken/empty task (e.g. dangling symlinks)
+    const repoPath = taskRepo(handlesDir, taskId);
+    const repoReal = repoPath && isDir(repoPath) ? realpath(repoPath) : null;
     const provider = taskId.includes(':') ? taskId.split(':')[0] : null;
     taskNodes.push({
-      key: nodeKey, label: taskId, provider, docs: ids,
-      mtime: Math.max(...ids.map((i) => docs[i].mtime)),
+      repo: repoReal,
+      node: {
+        key: nodeKey, label: taskId, provider, kind: 'task', docs: ids, children: [],
+        mtime: Math.max(...ids.map((i) => docs[i].mtime)),
+      },
     });
   }
-  taskNodes.sort((a, b) => b.mtime - a.mtime);
 
-  // Projects group — worktrees nest under the repo they belong to, so a
-  // repo shows once with its worktrees (and their docs) beneath it.
-  const roots = discoverRoots({ ...opts, taskIds });
+  // Projects — worktrees nest under their repo; a repo's target tasks
+  // (and any task targeting one of its worktrees) nest there too.
+  const taskRepoPaths = taskNodes.map((t) => t.repo).filter(Boolean);
+  const roots = discoverRoots({ ...opts, taskIds, extraRoots: [...(opts.extraRoots || []), ...taskRepoPaths] });
   const repoCache = new Map();
-  const realpath = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
 
   // Group discovered roots by their parent repo.
   const repos = new Map(); // repoPath → { repo, worktrees:Set }
@@ -426,25 +448,48 @@ function buildTree(opts = {}) {
   };
 
   const projectNodes = [];
+  const nodeByRoot = new Map(); // realpath → node (repo or worktree), for task attachment
   for (const { repo, worktrees } of repos.values()) {
     const repoNode = scanIntoNode(repo, 'repo');
     repoNode.children = [];
+    nodeByRoot.set(realpath(repo), repoNode);
     for (const wt of [...worktrees].sort()) {
       const child = scanIntoNode(wt, 'worktree');
-      if (child.docs.length) repoNode.children.push(child);
+      if (child.docs.length) {
+        child.children = child.children || [];
+        repoNode.children.push(child);
+        nodeByRoot.set(realpath(wt), child);
+      }
     }
-    repoNode.children.sort((a, b) => a.label.localeCompare(b.label));
-    if (!repoNode.docs.length && !repoNode.children.length) continue;
     projectNodes.push(repoNode);
   }
-  projectNodes.sort((a, b) => a.label.localeCompare(b.label));
+
+  // Attach each task to the node matching its target repo exactly (a
+  // worktree if it targeted one), else the parent repo. Tasks with no
+  // resolvable project are dropped — everything lives inside a project.
+  for (const { node, repo } of taskNodes) {
+    if (!repo) continue;
+    let owner = nodeByRoot.get(repo);
+    if (!owner) {
+      const { repo: parent } = resolveRepo(repo, repoCache);
+      owner = nodeByRoot.get(realpath(parent));
+    }
+    if (owner) owner.children.push(node);
+  }
+
+  // Drop empty nodes (no docs, no worktrees, no tasks) and sort.
+  const kept = projectNodes.filter((n) => n.docs.length || n.children.length);
+  for (const n of kept) {
+    n.children.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'worktree' ? -1 : 1; // worktrees first, tasks after
+      return a.label.localeCompare(b.label);
+    });
+  }
+  kept.sort((a, b) => a.label.localeCompare(b.label));
 
   return {
     docs,
-    groups: [
-      { kind: 'tasks', nodes: taskNodes },
-      { kind: 'projects', nodes: projectNodes },
-    ],
+    groups: [{ kind: 'projects', nodes: kept }],
   };
 }
 
