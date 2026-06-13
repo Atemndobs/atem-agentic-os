@@ -8,7 +8,8 @@
     "atem": "bin/atem.js"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "update-mermaid": "curl -fsSL https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js -o src/web/vendor/mermaid.min.js && node -e \"const s=require('fs').statSync('src/web/vendor/mermaid.min.js').size; if(s<1000000){throw new Error('mermaid bundle too small ('+s+' bytes) — download likely failed')} console.log('mermaid updated:', (s/1048576).toFixed(1)+'MB')\""
   },
   "engines": {
     "node": ">=20"
