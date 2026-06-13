@@ -195,8 +195,9 @@ module.exports = { buildTree, discoverRoots, decodeClaudeProjectDir, scanProject
 ```js
 test('GET / serves the SPA shell', ...);          // contains 'atem-web-app' marker
 test('GET /api/tree returns groups + generation', ...);
-test('GET /api/doc?id=0 returns html, raw, path, mtime', ...);
+test('GET /api/doc?id=0 returns html, raw, path, mtime, frontmatter', ...);
 test('doc html contains rendered heading from fixture', ...);
+test('SSE emits change when a PROJECT planning doc changes (not just task files)', ...);
 test('GET /api/doc with bad id → 404 JSON', ...); // id='999', id='../../etc/passwd', id='abc'
 test('GET /api/search?q= matches title and content with snippets', ...);
 test('unknown route → 404', ...);
@@ -212,12 +213,18 @@ test('rescan after change: new file appears in tree, open doc re-resolvable by n
 function createServer(opts = {}) {
   // state: { generation, docs, groups } from buildTree(opts)
   // const rescan = debounce(200ms) → buildTree + bump generation + broadcast SSE 'change'
-  // fs.watch(watchDirs, {recursive:true}) → rescan   (wrap: watch may throw on missing dir)
+  // watchDirs = [sessionsRoot (ATEM_WEB_WATCH_DIR)] + for each discovered project
+  //             root: its '.planning' and 'docs' dirs (only those that exist) +
+  //             the root itself non-recursively (PLAN.md/AGENTS.md edits).
+  //             Re-derive watchers after each rescan (new projects get watched).
+  // fs.watch(dir, {recursive:true}) per dir → rescan  (wrap each in try/catch;
+  //             watch may throw on missing dir)
   // routes (manual url.parse, no framework):
   //   GET /            → app.html (read once at startup, cache)
   //   GET /api/tree    → JSON state (docs metadata only, no content)
   //   GET /api/doc     → /^\d+$/ guard on id; fs.readFileSync(doc.path) at request
-  //                      time → markdown.render(); 404 if gone
+  //                      time → markdown.render(); 404 if gone.
+  //                      Response: { id, key, title, path, mtime, html, raw, frontmatter }
   //   GET /api/search  → q (min 2 chars); scan docs: title match + line matches,
   //                      ≤5 snippets/doc, ≤50 total
   //   GET /events      → SSE: headers, heartbeat 30s, client set, broadcast(JSON)
@@ -238,7 +245,7 @@ function createServer(opts = {}) {
 - [ ] **Step 2–3: Implement the SPA** (single file, vanilla JS, no external assets):
   - Hash router: `#/` dashboard (recent docs by mtime from `/api/tree`), `#/doc/<id>` document view; `hashchange` listener; invalid id → dashboard.
   - Sidebar: Tasks group (provider badge, seven files) + Projects group; collapsible nodes persisted to `localStorage('atem-web-collapsed')`; active doc highlighted.
-  - Doc view: fetch `/api/doc?id=`; header with title/path/mtime; raw toggle (`<pre>` of `raw`); TOC sidebar when ≥3 headings (from rendered `h1–h3` ids); rewrite internal `.md` links: after render, for each `<a>` whose href resolves (relative to doc path) to another doc's path in the tree → `#/doc/<id>`; external links `target=_blank rel=noopener`.
+  - Doc view: fetch `/api/doc?id=`; header with title/path/mtime; **frontmatter metadata card** (key/value table) above the body when frontmatter is non-empty; raw toggle (`<pre>` of `raw`); TOC sidebar when ≥3 headings (from rendered `h1–h3` ids); rewrite internal `.md` links: after render, for each `<a>` whose href resolves (relative to doc path) to another doc's path in the tree → `#/doc/<id>`; external links `target=_blank rel=noopener`.
   - Search: debounce 150ms → `/api/search`; results panel replaces tree; Enter/click navigates.
   - SSE: `EventSource('/events')`; on `change` → refetch tree; if open doc's `nodeKey+file` still exists, re-resolve its (possibly new) id and refetch content in place; else show "document removed" card.
   - Theme via `prefers-color-scheme`; readable measure (~72ch), code/table styling.
@@ -279,9 +286,11 @@ function commandWeb(gitRoot, args) {
     console.log(`${ICONS.ok} ATEM planning viewer: ${url}`);
     if (open && process.platform === 'darwin') spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
   });
-  // port-in-use: listen() retries port+1..port+20 before failing
+  // port-in-use: listen() retries port+1..port+20 (console note when it increments)
 }
 ```
+
+Implementation notes: `src/cli.js` currently imports only `execSync, execFileSync` from `node:child_process` — add `spawn`. `findGitRoot()` returns `null` outside a git repo; `createServer({ cwdRepo: null })` must filter null before realpath-dedupe. If enumerating the sessions dir directly, follow the `listTaskIds` convention in `src/recovery.js` (skip `.`- and `_`-prefixed entries).
 
 - [ ] **Step 4: Run** — PASS. **Step 5: Commit** `feat(cli): atem web command`
 
