@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execSync, execFileSync } = require('node:child_process');
+const { execSync, execFileSync, spawn } = require('node:child_process');
 
 const PRODUCT_NAME = 'ATEM';
 // ATEM = Agent Task Execution Mesh.
@@ -1294,6 +1294,32 @@ function commandSession(gitRoot, args = []) {
   // Default: one line — the freshest live (or freshest) syntheticId.
   // collectAmbientTasks already sorts live-first then mtime desc.
   console.log(kept[0].syntheticId);
+}
+
+function commandWeb(gitRoot, args) {
+  const usage = 'Usage: atem web [--port <n>] [--no-open]';
+  let port = 4400;
+  let open = true;
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--port') {
+      port = Number(args[++i]);
+      if (!Number.isInteger(port) || port < 0) throw new Error(usage);
+    } else if (args[i] === '--no-open') {
+      open = false;
+    } else {
+      throw new Error(usage);
+    }
+  }
+  const { createServer } = require('./web/server.js');
+  const app = createServer({ cwdRepo: gitRoot });
+  app.listen(port, (actualPort) => {
+    const url = `http://127.0.0.1:${actualPort}`;
+    console.log(`${ICONS.ok} ATEM planning viewer: ${url}`);
+    console.log('  Press Ctrl+C to stop.');
+    if (open && process.platform === 'darwin') {
+      spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
+    }
+  });
 }
 
 function commandGoals(gitRoot, args = []) {
@@ -4781,6 +4807,7 @@ Common command forms:
   atem snapshot <task-id> [--repo <repo-path>]
   atem note <task-id> "<note>" [--decision "<text>"] [--next "<text>"] [--validation "<text>"]
   atem goals [--repo <repo-path>] [--files <a,b,c>] [--json]
+  atem web [--port <n>] [--no-open]
   atem project init --repo <repo-path> [--convex]
   atem worktree start <task-id> --repo <repo-path> --branch <branch-name> [--path <worktree-path>]
   atem ready <task-id> --repo <repo-path> [--pr <url>]
@@ -4893,6 +4920,9 @@ function main(argv) {
         break;
       case 'goals':
         commandGoals(gitRoot, args);
+        break;
+      case 'web':
+        commandWeb(gitRoot, args);
         break;
       case 'ingest-omp':
         commandIngestOmp(gitRoot, args);

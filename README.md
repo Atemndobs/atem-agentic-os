@@ -126,6 +126,7 @@ Heuristics recognize: `PROJECT.md`, `ROADMAP.md`, `docs/action-plan.md`, `docs/s
 | --- | --- |
 | `atem resolve atem://<task>/<artifact>` | Dereference a URL to a local path |
 | `atem url list \| handles \| sync \| resolve` | Manage the symlink farm at `~/.atem/handles/` |
+| `atem web [--port <n>] [--no-open]` | Browse all planning docs as HTML at `http://127.0.0.1:4400` — ATEM task files plus the planning docs of every project any agent has touched on this machine (discovered via Claude Code / Codex / ATEM registries). Interactive SPA with search and live reload. |
 
 ### Recovery (Workstream 7)
 
