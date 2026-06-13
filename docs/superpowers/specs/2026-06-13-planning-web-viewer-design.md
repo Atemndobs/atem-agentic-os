@@ -18,7 +18,9 @@ Reading these means opening raw markdown in an editor, file by file. There is no
 | Decision | Choice |
 | --- | --- |
 | Scope | Both sources: ATEM task files AND repo planning docs |
+| Project coverage | All projects on this machine, discovered via agent registries (not just ATEM-referenced repos) |
 | Delivery | Local server (`atem web`), not static export |
+| Client | Interactive SPA (hash routing, collapsible tree, dashboard, in-app links) — not static per-page HTML |
 | v1 features | Browsing/reading + full-text search + live reload |
 | Approach | Zero-dependency, built into the atem CLI (no npm deps, matching ATEM's existing zero-dep philosophy) |
 
@@ -82,14 +84,18 @@ Security properties:
 
 Port handling: default port **4400**, auto-increment if in use. `--no-open` skips launching the browser.
 
-## UI
+## UI — interactive single-page app
 
-Docs-site layout, single page:
+The client is a true SPA (vanilla JS, embedded in the single served page — still zero-dep), not static per-request HTML. All navigation happens client-side against the JSON API; the page never reloads.
 
-- **Left sidebar:** search box at top, then two groups — *Tasks* (provider badge + task id, seven files beneath each) and *Projects* (repo name, planning doc tree beneath).
-- **Right pane:** rendered document with title, source file path, last-modified time, and a raw-markdown toggle.
+- **Client-side routing:** hash-based routes (`#/doc/<id>`, `#/`), so every document is deep-linkable and browser back/forward work.
+- **Left sidebar:** search box at top, then two groups — *Tasks* (provider badge + task id, seven files beneath each) and *Projects* (repo name, planning doc tree beneath). Groups and nodes are collapsible; state persists in `localStorage`. The active doc is highlighted.
+- **Right pane:** rendered document with title, source file path, last-modified time, and a raw-markdown toggle. Documents with 3+ headings get a floating table of contents with scroll-to-section links.
+- **Internal links:** relative `.md` links inside a document that resolve to another scanned doc are rewritten to in-app routes (`#/doc/<id>`), so plans that reference each other navigate inside the viewer. External links open normally in a new tab.
+- **Home dashboard (`#/`):** shown on launch — recently modified docs across all sources (mtime-sorted), grouped by task/project, so you immediately see what the agents have been writing.
+- **Search:** results render as you type (debounced) with snippets; selecting a result navigates in-app. Clearing restores the tree.
+- **Live updates:** SSE events update the tree, dashboard, and open document in place — no manual refresh ever needed.
 - Readable typography; dark/light theme via `prefers-color-scheme`.
-- Search results replace the sidebar list as you type; clearing restores the tree.
 
 ## Live reload
 
