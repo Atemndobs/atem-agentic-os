@@ -450,13 +450,15 @@ function parseStatusArgs(args) {
   let repoFilter = '';
   let showAll = false;
   let explicitRepo = false;
+  let verbose = false;
 
+  const usage = 'Usage: atem status [--repo <repo-path>] [--all] [--verbose|-v]';
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--repo') {
       const value = args[i + 1];
       if (!value) {
-        throw new Error('Usage: atem status [--repo <repo-path>] [--all]');
+        throw new Error(usage);
       }
       repoFilter = path.resolve(value);
       explicitRepo = true;
@@ -467,13 +469,17 @@ function parseStatusArgs(args) {
       showAll = true;
       continue;
     }
-    if (token.startsWith('--')) {
+    if (token === '--verbose' || token === '-v') {
+      verbose = true;
+      continue;
+    }
+    if (token.startsWith('--') || token.startsWith('-')) {
       throw new Error(`Unknown flag for status: ${token}`);
     }
-    throw new Error('Usage: atem status [--repo <repo-path>] [--all]');
+    throw new Error(usage);
   }
 
-  return { repoFilter, showAll, explicitRepo };
+  return { repoFilter, showAll, explicitRepo, verbose };
 }
 
 function parseGoalsArgs(args, gitRoot) {
@@ -1187,7 +1193,7 @@ function buildGoalsReportMarkdown(repoPath, docPaths, goals, tasks, unmatchedGoa
 }
 
 function commandStatus(gitRoot, args = []) {
-  const { repoFilter, showAll, explicitRepo } = parseStatusArgs(args);
+  const { repoFilter, showAll, explicitRepo, verbose } = parseStatusArgs(args);
   // Phase C.2: auto-scope to the current git repo unless --all or
   // --repo was passed. Explicit --repo always wins.
   let activeScope = repoFilter;
@@ -1205,8 +1211,89 @@ function commandStatus(gitRoot, args = []) {
   } else {
     console.log('Scope: machine-wide.');
   }
-  printExternalProviderActivity(activeScope, { autoScoped, gitRoot });
-  printRepoHarnessStatus(gitRoot);
+  printExternalProviderActivity(activeScope, { autoScoped, gitRoot, verbose });
+  printRepoHarnessStatus(gitRoot, { verbose });
+  if (!verbose) {
+    console.log('');
+    console.log(paint('Tip: pass --verbose for per-PID details and full goal text.', 'gray'));
+  }
+}
+
+// `atem session` — print the synthetic session id for the current cwd.
+// Pipe-friendly default so handoff is one line:
+//   atem handoff "$(atem session)" --to codex
+// Flags:
+//   --all     list every matching id (one per line)
+//   --json    structured output with provider, live, title, cwd
+//   --repo P  override the cwd
+function commandSession(gitRoot, args = []) {
+  const usage = 'Usage: atem session [--repo <repo-path>] [--all] [--json] [--verbose]';
+  let repoPath = gitRoot || path.resolve(process.cwd());
+  let showAll = false;
+  let asJson = false;
+  let verbose = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--repo') {
+      const value = args[i + 1];
+      if (!value) throw new Error(usage);
+      repoPath = path.resolve(value);
+      i += 1;
+      continue;
+    }
+    if (token === '--all') { showAll = true; continue; }
+    if (token === '--json') { asJson = true; continue; }
+    if (token === '--verbose' || token === '-v') { verbose = true; continue; }
+    if (token.startsWith('--') || token.startsWith('-')) {
+      throw new Error(`Unknown flag for session: ${token}`);
+    }
+    throw new Error(usage);
+  }
+
+  const signals = collectExternalProviderSignals(repoPath);
+  const ambient = collectAmbientTasks(signals);
+  const { kept } = dedupeAmbientTasks(ambient);
+
+  if (kept.length === 0) {
+    if (asJson) { console.log('[]'); return; }
+    console.error(`No active sessions detected for ${repoPath}.`);
+    console.error('Hint: open a coding agent in this repo, or pass --repo <other-path>.');
+    process.exitCode = 1;
+    return;
+  }
+
+  if (asJson) {
+    console.log(JSON.stringify(kept.map((r) => ({
+      id: r.syntheticId,
+      provider: r.provider,
+      live: r.live,
+      title: r.title,
+      cwd: r.cwd,
+    })), null, 2));
+    return;
+  }
+
+  if (verbose || showAll) {
+    if (verbose) {
+      const rows = kept.map((row) => [
+        row.syntheticId,
+        row.provider,
+        row.live ? `${ICONS.ok} live` : `${ICONS.none} ${synthetic.formatRelativeAge(row.mtimeMs) || 'recent'}`,
+        ellipsizeRight(row.title, 40) || '—',
+      ]);
+      console.log(`Sessions for ${repoPath} (${kept.length}):`);
+      console.log(renderTable(['ATEM id', 'Provider', 'State', 'Title'], rows));
+      console.log('');
+      console.log(paint(`Default (live first): ${kept[0].syntheticId}`, 'gray'));
+      return;
+    }
+    for (const row of kept) console.log(row.syntheticId);
+    return;
+  }
+
+  // Default: one line — the freshest live (or freshest) syntheticId.
+  // collectAmbientTasks already sorts live-first then mtime desc.
+  console.log(kept[0].syntheticId);
 }
 
 function commandGoals(gitRoot, args = []) {
@@ -1662,7 +1749,7 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
     const label = s.live ? (s.pid ? `pid ${s.pid} live` : 'live') : 'recent';
     detailRows.push(['omp', label, ellipsizeRight(s.title || s.sessionId, 40), shortenPath(s.cwd, 50)]);
   }
-  if (detailRows.length > 0) {
+  if (detailRows.length > 0 && opts.verbose) {
     console.log('');
     console.log(renderTable(['Provider', 'Signal', 'Count', 'Path'], detailRows));
   }
@@ -1679,23 +1766,24 @@ function printExternalProviderActivity(repoFilter = '', opts = {}) {
   if (deduped.length > 0 || otherRepoCount > 0) {
     console.log('');
     console.log(`Detected sessions (${deduped.length}):`);
-    const rows = deduped.slice(0, 10).map((row) => [
+    const rowLimit = opts.verbose ? 20 : 6;
+    const titleWidth = 40;
+    const cwdWidth = opts.verbose ? 50 : 32;
+    const rows = deduped.slice(0, rowLimit).map((row) => [
       synthetic.shortId(row.syntheticId, 6),
       row.live
         ? `${ICONS.ok} live`
         : `${ICONS.none} ${synthetic.formatRelativeAge(row.mtimeMs) || 'recent'}`,
-      ellipsizeRight(row.title, 40) || '—',
-      ellipsizeRight(detectWorktreeName(row.cwd), 28) || '—',
-      shortenPath(row.cwd, 50) || '—',
+      ellipsizeRight(row.title, titleWidth) || '—',
+      ellipsizeRight(detectWorktreeName(row.cwd), 24) || '—',
+      shortenPath(row.cwd, cwdWidth) || '—',
     ]);
     console.log(renderTable(['ATEM id', 'State', 'Title', 'Worktree', 'cwd'], rows));
     const footnotes = [];
+    if (deduped.length > rowLimit) footnotes.push(`${deduped.length - rowLimit} more (pass --verbose).`);
     if (elidedCount > 0) footnotes.push(`Same repo, deduped: ${elidedCount} elided.`);
     if (otherRepoCount > 0) footnotes.push(`Other repos: ${otherRepoCount} hidden (pass --all to see).`);
     if (footnotes.length > 0) console.log(footnotes.join(' '));
-    if (deduped[0]) {
-      console.log(`Tip: \`atem resolve atem://${synthetic.shortId(deduped[0].syntheticId, 6)}.../<artifact>\` works without \`atem start\`.`);
-    }
   }
 }
 
@@ -2067,7 +2155,15 @@ function requiredSessionFileNames() {
   ];
 }
 
-function printRepoHarnessStatus(gitRoot) {
+function printRepoHarnessStatus(gitRoot, opts = {}) {
+  const verbose = !!opts.verbose;
+  // Non-verbose: flatten newlines and cap each value at this many chars so
+  // the table fits a normal terminal. Verbose: print as-is (multi-line).
+  const trunc = (value, max = 80) => {
+    if (verbose) return value;
+    return ellipsizeRight(value, max);
+  };
+
   console.log('');
   console.log('ATEM context:');
 
@@ -2082,14 +2178,14 @@ function printRepoHarnessStatus(gitRoot) {
   }
   if (paths.mode === 'global') {
     ctxRows.push(['store mode', 'global handoff store (default)']);
-    if (repoPaths && fs.existsSync(repoPaths.harnessDir)) {
+    if (verbose && repoPaths && fs.existsSync(repoPaths.harnessDir)) {
       ctxRows.push(['project store (inactive)', repoPaths.harnessDir]);
       ctxRows.push(['hint', 'set ATEM_HARNESS_MODE=repo to use repo-local harness']);
     }
-    ctxRows.push(['state dir', paths.harnessDir]);
+    if (verbose) ctxRows.push(['state dir', paths.harnessDir]);
   } else {
     ctxRows.push(['store mode', 'project handoff store (ATEM_HARNESS_MODE=repo)']);
-    ctxRows.push(['state dir', paths.harnessDir]);
+    if (verbose) ctxRows.push(['state dir', paths.harnessDir]);
   }
 
   if (!fs.existsSync(paths.harnessDir)) {
@@ -2128,11 +2224,11 @@ function printRepoHarnessStatus(gitRoot) {
   ctxRows.push(['active task', taskId]);
   ctxRows.push(['task type', taskType]);
   ctxRows.push(['current provider', provider]);
-  ctxRows.push(['goal', goal]);
+  ctxRows.push(['goal', trunc(goal, 100)]);
   ctxRows.push(['status', status]);
-  ctxRows.push(['next step', nextStep]);
-  ctxRows.push(['files touched', filesTouched.replace(/\n+/g, '; ')]);
-  ctxRows.push(['validation', validationStatus.replace(/\n+/g, '; ')]);
+  ctxRows.push(['next step', trunc(nextStep, 100)]);
+  ctxRows.push(['files touched', trunc(filesTouched.replace(/\n+/g, '; '), 100)]);
+  ctxRows.push(['validation', trunc(validationStatus.replace(/\n+/g, '; '), 100)]);
   console.log(renderTable(['Key', 'Value'], ctxRows));
 }
 
@@ -4630,7 +4726,12 @@ Usage:
 Global session commands:
   status
     Show machine-wide provider activity + active ATEM session context.
+    Compact by default; pass --verbose/-v for per-PID details + full goal text.
     Optional: --repo <repo-path> to scope detected activity to a repository path.
+  session
+    Print the synthetic session id for the current cwd (pipe-friendly).
+    Use with handoff: \`atem handoff "$(atem session)" --to codex\`.
+    Flags: --all (list every match), --json, --verbose (table), --repo <path>.
   init
     Initialize handoff store files (global by default, repo when ATEM_HARNESS_MODE=repo).
   start
@@ -4671,7 +4772,8 @@ Project/worktree commands:
     Print/write integration checklist (no auto-merge, no auto-deploy).
 
 Common command forms:
-  atem status [--repo <repo-path>]
+  atem status [--repo <repo-path>] [--all] [--verbose]
+  atem session [--repo <repo-path>] [--all] [--json] [--verbose]
   atem start "<task>" [--type <type>] [--repo <repo-path>]
   atem adopt <task-id>
   atem route <task-id> --to <provider> [--repo <repo-path>]
@@ -4731,6 +4833,9 @@ function main(argv) {
         break;
       case 'status':
         commandStatus(gitRoot, args);
+        break;
+      case 'session':
+        commandSession(gitRoot, args);
         break;
       case 'route':
         commandRoute(gitRoot, args);
