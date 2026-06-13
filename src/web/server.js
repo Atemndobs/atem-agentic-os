@@ -10,12 +10,27 @@ const os = require('node:os');
 
 const { buildTree } = require('./scan.js');
 const markdown = require('./markdown.js');
+const config = require('./config.js');
 
 const APP_HTML = fs.readFileSync(path.join(__dirname, 'app.html'));
 
 const DEBOUNCE_MS = 200;
 const SEARCH_MAX_TOTAL = 50;
 const SEARCH_MAX_PER_DOC = 5;
+
+function readBody(req, cap = 65536) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > cap) { reject(new Error('body too large')); req.destroy(); return; }
+      data += chunk;
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
 
 function json(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -132,28 +147,41 @@ function createServer(opts = {}) {
     res.on('close', () => { clearInterval(heartbeat); sseClients.delete(res); });
   }
 
+  const cfgOpts = { configPath: opts.configPath };
+
   const server = http.createServer((req, res) => {
-    try {
-      const url = new URL(req.url, 'http://127.0.0.1');
-      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
-      switch (url.pathname) {
-        case '/':
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          return res.end(APP_HTML);
-        case '/api/tree':
-          return json(res, 200, state);
-        case '/api/doc':
-          return handleDoc(url.searchParams, res);
-        case '/api/search':
-          return handleSearch(url.searchParams, res);
-        case '/events':
-          return handleEvents(res);
-        default:
-          return json(res, 404, { error: 'not found' });
+    (async () => {
+      try {
+        const url = new URL(req.url, 'http://127.0.0.1');
+        if (req.method === 'POST' && url.pathname === '/api/config') {
+          let incoming;
+          try { incoming = JSON.parse((await readBody(req)) || '{}'); } catch {
+            return json(res, 400, { error: 'invalid json' });
+          }
+          return json(res, 200, config.saveConfig(cfgOpts, incoming));
+        }
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+        switch (url.pathname) {
+          case '/':
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end(APP_HTML);
+          case '/api/tree':
+            return json(res, 200, state);
+          case '/api/doc':
+            return handleDoc(url.searchParams, res);
+          case '/api/search':
+            return handleSearch(url.searchParams, res);
+          case '/api/config':
+            return json(res, 200, config.loadConfig(cfgOpts));
+          case '/events':
+            return handleEvents(res);
+          default:
+            return json(res, 404, { error: 'not found' });
+        }
+      } catch (e) {
+        try { json(res, 500, { error: String(e && e.message || e) }); } catch { /* socket gone */ }
       }
-    } catch (e) {
-      try { json(res, 500, { error: String(e && e.message || e) }); } catch { /* socket gone */ }
-    }
+    })();
   });
 
   function listen(port, cb, attempt = 0) {

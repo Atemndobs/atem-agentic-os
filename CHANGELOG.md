@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `atem web`: collapsible **Settings panel** to show/hide parts of the view —
+  toggles for Tasks, worktrees, Claude memory, executed plans, and other
+  (uncategorized) docs, plus hide-lists for folders, files, and projects.
+  Config persists durably to `~/.atem/web-config.json` (served via
+  `GET/POST /api/config`) and is mirrored into the browser for instant
+  toggling; filtering is applied client-side so changes are immediate.
 - `atem web`: sidebar now renders a real nested **folder tree** (date-sorted,
   newest first) instead of a flat path list; repos group their worktrees.
 - `atem web`: **status color-coding** — the project's north-star doc

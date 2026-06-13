@@ -27,6 +27,7 @@ async function startApp(fx, extra = {}) {
     claudeProjectsDir: path.join(fx.root, 'no-claude'),
     codexSessionsDir: path.join(fx.root, 'no-codex'),
     extraRoots: [fx.proj],
+    configPath: path.join(fx.root, 'web-config.json'),
     ...extra,
   });
   const port = await new Promise((resolve) => app.listen(0, resolve));
@@ -53,6 +54,8 @@ test('SPA shell contains router, SSE, search, and persistence wiring', async (t)
   assert.match(html, /localStorage/, 'collapse persistence');
   assert.match(html, /id="search"/, 'search input');
   assert.match(html, /prefers-color-scheme/, 'theme support');
+  assert.match(html, /id="settings"/, 'settings panel');
+  assert.match(html, /\/api\/config/, 'config wiring');
 });
 
 test('GET /api/tree returns groups + generation', async (t) => {
@@ -105,6 +108,36 @@ test('GET /api/search matches content with snippets', async (t) => {
   // short queries rejected politely
   const short = await (await fetch(`${base}/api/search?q=a`)).json();
   assert.deepEqual(short.results, []);
+});
+
+test('config round-trips: GET defaults, POST persists, GET reflects', async (t) => {
+  const fx = makeFixture();
+  const { app, base } = await startApp(fx);
+  t.after(() => app.close());
+  const initial = await (await fetch(base + '/api/config')).json();
+  assert.equal(initial.showExecuted, true);
+  assert.deepEqual(initial.hideFolders, []);
+
+  const posted = await (await fetch(base + '/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ showExecuted: false, hideFolders: 'research, archive', junk: 'x' }),
+  })).json();
+  assert.equal(posted.showExecuted, false);
+  assert.deepEqual(posted.hideFolders, ['research', 'archive']);
+  assert.equal('junk' in posted, false);
+
+  const after = await (await fetch(base + '/api/config')).json();
+  assert.equal(after.showExecuted, false);
+  assert.deepEqual(after.hideFolders, ['research', 'archive']);
+});
+
+test('POST /api/config with invalid JSON → 400', async (t) => {
+  const fx = makeFixture();
+  const { app, base } = await startApp(fx);
+  t.after(() => app.close());
+  const res = await fetch(base + '/api/config', { method: 'POST', body: 'not json' });
+  assert.equal(res.status, 400);
 });
 
 test('unknown routes 404', async (t) => {
