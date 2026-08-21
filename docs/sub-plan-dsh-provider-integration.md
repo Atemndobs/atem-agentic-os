@@ -41,7 +41,17 @@ provider matrix and harvests design lessons.
 
 ## Track A: dsh as a provider
 
-### A0. Spike ACP first (~1-2h, decides A2)
+### A0. Spike ACP first (~1-2h, decides A2): DONE, PASS
+
+**Outcome (2026-08-21): ACP works; the launcher is the generic ACP path.**
+An ATEM-side client drove dsh over ACP stdio end to end (`initialize` →
+`session/new` → `session/prompt`), backed by local Ollama, and got a
+committed answer. See [spikes/dsh-acp/FINDINGS.md](../spikes/dsh-acp/FINDINGS.md).
+Key consequence: ACP is the outbound (`--to dsh`) launcher seam and
+generalizes to any ACP agent; ingest (`--from dsh`) must read `~/.dsh`
+state instead, since the ACP demo supports fresh sessions only.
+
+Original spike question, for the record:
 
 dsh speaks ACP (Agent Client Protocol), an emerging cross-agent
 standard. ATEM's launchers are today per-provider CLI hacks (Codex
