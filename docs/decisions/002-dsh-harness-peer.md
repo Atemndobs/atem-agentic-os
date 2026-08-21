@@ -37,11 +37,18 @@ sits *inside* ATEM's provider matrix, beside Codex and Cursor.
    ATEM's core with it.** It operates one layer below us and fills no
    gap in a system that deliberately has no agent loop.
 
-2. **Treat dsh as a future handoff target, not now.** If it gains
-   adoption it becomes one more adapter + launcher (detect session,
-   write `AGENTS.md`, launch). It already ships an `AGENTS.md`
-   convention and an `.agents/` directory, so the adapter would be
-   cheap. Gate this on observed local usage, not on the star count.
+2. **Treat dsh as a handoff target, gated on observed local usage.**
+   It becomes one more adapter + launcher (detect session, write
+   `AGENTS.md`, launch). It already ships an `AGENTS.md` convention and
+   an `.agents/` directory, so the adapter would be cheap.
+
+   **Update (2026-08-21): the gate is met.** dsh is now cloned, built,
+   and running locally at `~/sites/deepseek-harness` (see
+   [[project-deepseek-harness-local]]); a headless one-shot lane
+   (`dsh --profile headless "task"`) and native `AGENTS.md` context
+   injection were verified by a live local run. The provider
+   integration is therefore promoted from deferred to planned, specced
+   in [sub-plan-dsh-provider-integration](../sub-plan-dsh-provider-integration.md).
 
 3. **Backlog two architectural learnings** (below). Steal the patterns,
    not the framework. We are not adopting Cordis.
