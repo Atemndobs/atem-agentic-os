@@ -29,6 +29,7 @@ const { makeCodexLauncher } = require('./codex.js');
 const { makeClaudeCodeLauncher } = require('./claude-code.js');
 const { makeCursorLauncher } = require('./cursor.js');
 const { makeOpencodeLauncher } = require('./opencode.js');
+const { makeDshLauncher } = require('./dsh.js');
 
 const print = makePrintLauncher();
 
@@ -39,6 +40,7 @@ function defaultRegistry() {
     'claude-code': makeClaudeCodeLauncher(),
     cursor: makeCursorLauncher(),
     opencode: makeOpencodeLauncher(),
+    dsh: makeDshLauncher(),
     // The rest fall through to print until they have their own launchers.
   };
 }

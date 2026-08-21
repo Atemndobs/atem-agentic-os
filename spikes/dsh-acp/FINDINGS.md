@@ -75,16 +75,25 @@ Exit 0. Fully local, no paid key.
   (`Known Limitations`). So `atem handoff --from dsh` (ingesting an existing dsh
   session) cannot ride ACP session-resume; it must read the persisted event log
   / `~/.dsh` state instead. ACP is the outbound (`--to dsh`) path.
-- **`toolCalls=0`** here: the model answered from dsh's injected workspace
-  context. Tool-calling over ACP still needs a confirming run on a task that
-  forces file reads.
+- **ACP suppresses tool/reasoning updates by design** ("committed answers
+  only"), so `toolCallCount` is usually 0 even when tools ran. Confirmed
+  separately: a task forcing `ls -1 packages | wc -l` returned exactly `55`
+  (the real count, and different from the model's from-context guess of 50),
+  proving dsh executed a sandboxed bash tool inside the ACP session. For a real
+  trajectory, read dsh's persisted session under `$DSH_HOME`, not this stream.
+
+## Done (promotion)
+
+- Tool execution over ACP: confirmed (`55`).
+- Promoted into a real launcher: `src/launchers/dsh.js` (+ reusable
+  `dsh-acp.js`, detached `dsh-acp-runner.js`, canonical `dsh-acp.config.yml`),
+  registered in the launcher registry, unit-tested, and smoke-tested end to end
+  (detached runner wrote `status: done, text: "55"`).
 
 ## Next
 
-- Promote the client into `src/launchers/dsh.js` (ACP variant) with the
-  detection adapter (`src/adapters/dsh.js`) reading `~/.dsh` state.
-- One more spike run on a task that forces tool calls, to confirm the
-  `tool_call` / `tool_call_update` updates flow (the client already logs them).
+- `src/adapters/dsh.js` for detection/ingest, reading `~/.dsh` state (the
+  `--from dsh` path, since the ACP demo is fresh-sessions-only).
 
 ## Files
 
