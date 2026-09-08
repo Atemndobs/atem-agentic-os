@@ -45,6 +45,6 @@ A test leaves this list when its dependency on the machine is removed, usually b
 injecting the roots it scans instead of reading `$HOME`. Delete its row, and CI
 starts gating it.
 
-Tracked in the issue linked from the pull request that created this file. The
-list is meant to shrink; a quarantine that only grows is a way of not fixing
+Tracked in [issue #3](https://github.com/Atemndobs/atem-agentic-os/issues/3).
+The list is meant to shrink; a quarantine that only grows is a way of not fixing
 things.
