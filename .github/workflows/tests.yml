@@ -15,7 +15,7 @@ name: Tests
 #
 # WHAT IT RUNS
 # ------------
-# `node --test`, which is the whole suite: the session handoff, the adapters,
+# The gated suite: the session handoff, the adapters,
 # the launchers, and the Convex Guard scanner and ratchet. That includes an end
 # to end scan of a fixture repository with planted violations, asserted by exact
 # count, so a rule that stops firing fails here rather than going quiet across
@@ -45,4 +45,28 @@ jobs:
 
       - run: npm ci
 
-      - run: npm test
+      # The gated suite. The quarantine list lives in test/QUARANTINE.md and is
+      # parsed from there, so a test cannot be excluded by editing a YAML line
+      # nobody reads.
+      - name: Tests (gated)
+        run: node --test $(node scripts/test-partition.mjs gated)
+
+  # Quarantined tests still run, and their failure does not block a merge.
+  #
+  # They pass on a developer's machine and fail on a clean runner because they
+  # read a real $HOME, a real ~/.claude registry and real repositories. Deleting
+  # them would lose real assertions; leaving them in the gate would make the gate
+  # permanently red, and a check that is always red is one people learn to
+  # ignore. Both outcomes are worse than a list that is meant to shrink.
+  quarantined:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Tests (quarantined, reporting only)
+        run: node --test $(node scripts/test-partition.mjs quarantined)
