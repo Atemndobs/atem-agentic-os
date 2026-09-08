@@ -248,3 +248,56 @@ test("dynamic-large-take: a module constant is accepted", async () => {
   `);
   assert.ok(!ids(f).includes("dynamic-large-take"));
 });
+
+// ------------------------------------------------- two-step results (dataflow)
+
+test("scan-to-count: the two-step form is seen", async () => {
+  // How people actually write it. Seeing only the inline form is why this rule
+  // reported zero findings against 361 files.
+  const f = await scan(`
+    export const howMany = query({
+      handler: async (ctx, args) => {
+        const rows = await ctx.db
+          .query("jobs")
+          .withIndex("by_p", (q) => q.eq("p", args.id))
+          .collect();
+        return rows.length;
+      },
+    });
+  `);
+  assert.ok(ids(f).includes("scan-to-count"));
+});
+
+test("post-collect-cap: the two-step form is seen", async () => {
+  const f = await scan(`
+    export const firstFew = query({
+      handler: async (ctx, args) => {
+        const rows = await ctx.db
+          .query("jobs")
+          .withIndex("by_p", (q) => q.eq("p", args.id))
+          .collect();
+        return rows.slice(0, 20);
+      },
+    });
+  `);
+  assert.ok(ids(f).includes("post-collect-cap"));
+});
+
+test("two-step: returning the rows themselves is not a count or a cap", async () => {
+  // False-positive guard: naming a result is not a violation. Only .length and
+  // .slice on it are, and mapping over rows is ordinary code.
+  const f = await scan(`
+    export const list = query({
+      handler: async (ctx, args) => {
+        const rows = await ctx.db
+          .query("jobs")
+          .withIndex("by_p", (q) => q.eq("p", args.id))
+          .take(50);
+        return rows.map((r) => r.name);
+      },
+    });
+  `);
+  const got = ids(f);
+  assert.ok(!got.includes("scan-to-count"));
+  assert.ok(!got.includes("post-collect-cap"));
+});

@@ -28,6 +28,85 @@ export function loadTypeScript(repoRoot) {
   }
 }
 
+/** Look past `await`, parens and assertions to the node that uses a result. */
+function unwrap(ts, node) {
+  let n = node.parent;
+  while (
+    n &&
+    (ts.isAwaitExpression(n) ||
+      ts.isParenthesizedExpression(n) ||
+      ts.isNonNullExpression(n) ||
+      ts.isAsExpression(n))
+  ) {
+    n = n.parent;
+  }
+  return n;
+}
+
+/** The nearest enclosing function body, for a local search. */
+function enclosingBody(ts, node) {
+  let n = node.parent;
+  while (n) {
+    if (
+      ts.isFunctionDeclaration(n) ||
+      ts.isFunctionExpression(n) ||
+      ts.isArrowFunction(n) ||
+      ts.isMethodDeclaration(n)
+    ) {
+      return n.body ?? null;
+    }
+    n = n.parent;
+  }
+  return null;
+}
+
+/**
+ * What is done with a chain's result, whether or not it is named first.
+ *
+ * `(await q.collect()).length` and
+ *
+ *   const rows = await q.collect();
+ *   return rows.length;
+ *
+ * are the same read and the same mistake. Only seeing the first is how
+ * scan-to-count reported zero findings against a codebase of 361 files: the
+ * two-step form is how people actually write it.
+ *
+ * The search is deliberately local. It follows one assignment inside one
+ * function body, which is where this shape lives. It does not chase a variable
+ * across functions or through a return, and a rule reading this should not
+ * assume it does.
+ */
+function resultUses(ts, chainNode) {
+  const uses = new Set();
+
+  const direct = unwrap(ts, chainNode);
+  if (direct && ts.isPropertyAccessExpression(direct)) {
+    uses.add(direct.name.text);
+  }
+
+  // Named first: `const rows = await <chain>;`
+  if (direct && ts.isVariableDeclaration(direct) && direct.name && ts.isIdentifier(direct.name)) {
+    const varName = direct.name.text;
+    const body = enclosingBody(ts, chainNode);
+    if (body) {
+      const walk = (n) => {
+        if (
+          ts.isPropertyAccessExpression(n) &&
+          ts.isIdentifier(n.expression) &&
+          n.expression.text === varName
+        ) {
+          uses.add(n.name.text);
+        }
+        ts.forEachChild(n, walk);
+      };
+      walk(body);
+    }
+  }
+
+  return uses;
+}
+
 /**
  * One `ctx.db.query(...)` chain, flattened into the order a reader sees it.
  *
@@ -124,6 +203,8 @@ export function scanSource({ ts, filePath, sourceText, rules, schema }) {
             methods: calls.map((c) => c.method),
             has: (m) => calls.some((c) => c.method === m),
             find: (m) => calls.find((c) => c.method === m),
+            // What happens to the rows, named or not. See resultUses.
+            uses: resultUses(ts, node),
           });
         }
       }

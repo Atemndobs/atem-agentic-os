@@ -9,27 +9,6 @@
  * Rules do not parse. They read the flattened chain the engine hands them.
  */
 
-/**
- * The property access applied to a chain's RESULT, looking past the wrappers.
- *
- * `(await ctx.db.query(...).collect()).length` puts an await and a parenthesis
- * between the call and the `.length`. Reading only the immediate parent misses
- * every awaited chain, which is all of them.
- */
-function resultAccess(ts, node) {
-  let n = node.parent;
-  while (
-    n &&
-    (ts.isAwaitExpression(n) ||
-      ts.isParenthesizedExpression(n) ||
-      ts.isNonNullExpression(n) ||
-      ts.isAsExpression(n))
-  ) {
-    n = n.parent;
-  }
-  return n && ts.isPropertyAccessExpression(n) ? n : null;
-}
-
 /** Terminators that materialise rows. `.paginate` is bounded by construction. */
 const MATERIALISERS = new Set(["collect", "take", "first", "unique"]);
 
@@ -107,10 +86,9 @@ export const unboundedIndexCollect = {
  */
 export const scanToCount = {
   id: "scan-to-count",
-  check(chain, { ts }) {
+  check(chain) {
     if (!chain.has("collect")) return [];
-    const outer = resultAccess(ts, chain.node);
-    if (!outer || outer.name.text !== "length") return [];
+    if (!chain.uses.has("length")) return [];
     return [
       {
         message:
@@ -129,10 +107,9 @@ export const scanToCount = {
  */
 export const postCollectCap = {
   id: "post-collect-cap",
-  check(chain, { ts }) {
+  check(chain) {
     if (!chain.has("collect")) return [];
-    const outer = resultAccess(ts, chain.node);
-    if (!outer || outer.name.text !== "slice") return [];
+    if (!chain.uses.has("slice")) return [];
     return [
       {
         message:
