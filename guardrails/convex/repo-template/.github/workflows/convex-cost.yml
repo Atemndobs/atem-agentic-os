@@ -1,0 +1,31 @@
+# Convex Read-Cost Ratchet.
+#
+# The gate lives in the repository on purpose. A check that only runs inside the
+# Harness, or inside one coding agent, is bypassed by not using them: the GitHub
+# web editor, another agent, an IDE and a local script all reach main without it.
+# This runs on the pull request, so every one of those paths meets it.
+#
+# Installed by `atem guardrails convex adopt`. Upgrade with
+# `atem guardrails convex upgrade`, which re-vendors .convex-guard/ and opens a PR.
+name: Convex Cost
+
+on:
+  pull_request:
+    paths:
+      - "convex/**"
+      - ".convex-guard/**"
+      - ".convex-cost.json"
+      - ".convex-cost-baseline.json"
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The scanner needs the repository's own TypeScript and nothing else.
+      - run: npm ci
+      - run: node .convex-guard/cli.mjs
