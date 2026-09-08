@@ -1,0 +1,48 @@
+name: Tests
+
+# The Harness's own gate.
+#
+# WHY THIS EXISTS
+# ---------------
+# This repository is about to ship a capability whose entire argument is that a
+# standard is only real when a machine refuses code that breaks it. Convex Guard
+# gates eleven repositories. It was, until this file, itself ungated: 257 tests
+# passed because somebody ran them locally, which is the same trust model the
+# guard exists to replace.
+#
+# It also runs on a repository with one collaborator. Nobody is watching the
+# merge, so the merge has to watch itself.
+#
+# WHAT IT RUNS
+# ------------
+# `node --test`, which is the whole suite: the session handoff, the adapters,
+# the launchers, and the Convex Guard scanner and ratchet. That includes an end
+# to end scan of a fixture repository with planted violations, asserted by exact
+# count, so a rule that stops firing fails here rather than going quiet across
+# eleven repositories.
+#
+# npm ci rather than npm install: the lockfile is the point of a CI install, and
+# `typescript` (the scanner's parser, dev-only here) must be the pinned version
+# rather than whatever resolves today.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the engines floor in package.json. The scanner uses
+          # node:test and ESM, both of which need it.
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
