@@ -1,0 +1,7 @@
+{
+  "$schema": "https://atem.dev/schemas/convex-cost.json",
+  "guard": "0.1.0",
+  "mode": "audit",
+  "baseline": ".convex-cost-baseline.json",
+  "rules": {}
+}
