@@ -11,15 +11,22 @@
  */
 
 import path from "node:path";
+import fs from "node:fs";
 import { inventory, audit, status, defaultRoots } from "./audit.mjs";
+import { surveyFleet } from "./fleet.mjs";
+import { scanRepo } from "../scanner/scan-repo.mjs";
+import { renderRepoReport } from "./report.mjs";
+import { GUARD_VERSION } from "../scanner/cli.mjs";
 
 const HELP = `atem guardrails convex <verb>
 
   inventory            Convex repositories and what each holds itself to
   audit                scan the fleet, report findings and drift
   status [dir]         one repository in detail (default: cwd)
+  report               write a CONVEX-READ-COST.html report into each repository
 
 Options
+  --dry-run            report verb: print what would be written, write nothing
   --root <path>        add a search root (repeatable; default ~/sites)
   --json               machine-readable
 `;
@@ -154,6 +161,47 @@ export function run(argv) {
     const result = audit(roots);
     return { code: 0, output: json ? JSON.stringify(result, null, 2) : renderAudit(result) };
   }
+  if (verb === "report") {
+    const dry = argv.includes("--dry-run");
+    const written = [];
+    for (const r of surveyFleet(roots)) {
+      // A mirror's findings belong to the repository that owns the backend.
+      // Writing the same report twice would have two teams fixing one thing.
+      if (r.mirrorOf) {
+        written.push({ name: r.name, skipped: `mirror of ${r.mirrorOf}` });
+        continue;
+      }
+      if (!r.scannable) {
+        written.push({ name: r.name, skipped: "no TypeScript installed" });
+        continue;
+      }
+      const findings = scanRepo(r.dir);
+      const html = renderRepoReport({
+        name: r.name,
+        generatedAt: new Date().toISOString().slice(0, 10),
+        findings,
+        guard: GUARD_VERSION,
+        convexVersion: r.convexVersion,
+        adopted: r.adopted,
+      });
+      const out = path.join(r.dir, "CONVEX-READ-COST.html");
+      if (!dry) fs.writeFileSync(out, html);
+      written.push({ name: r.name, path: out, findings: findings.length });
+    }
+    const lines = written.map((w) =>
+      w.skipped
+        ? `${pad(w.name, 26)}skipped: ${w.skipped}`
+        : `${pad(w.name, 26)}${num(w.findings, 5)}  ${w.path}`,
+    );
+    lines.push("");
+    lines.push(
+      dry
+        ? "Dry run: nothing written."
+        : `${written.filter((w) => !w.skipped).length} report(s) written.`,
+    );
+    return { code: 0, output: json ? JSON.stringify(written, null, 2) : lines.join("\n") };
+  }
+
   if (verb === "status") {
     const dir = path.resolve(rest[1] ?? process.cwd());
     const s = status(dir);
