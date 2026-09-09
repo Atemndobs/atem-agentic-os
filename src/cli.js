@@ -2681,6 +2681,31 @@ function commandUrl(gitRoot, args) {
 }
 
 // F.3: install ATEM's MCP server into each provider's config.
+/**
+ * `atem guardrails <family> <verb>`: the Harness as control plane.
+ *
+ * Read-only today: inventory, audit, status. `adopt` and `upgrade` write into
+ * other repositories and are deliberately absent until they are reviewable on
+ * their own.
+ *
+ * Async because the implementation is ESM and this file is CommonJS. The caller
+ * returns the promise so a failure still sets the exit code.
+ */
+async function commandGuardrails(args) {
+  const family = args[0];
+  if (!family || family === 'help') {
+    console.log('atem guardrails convex <inventory|audit|status>');
+    return;
+  }
+  if (family !== 'convex') {
+    throw new Error(`Unknown guardrail family: ${family}. Only "convex" exists.`);
+  }
+  const mod = await import('../guardrails/convex/fleet-audit/cli.mjs');
+  const { code, output } = mod.run(args.slice(1));
+  console.log(output);
+  if (code !== 0) process.exitCode = code;
+}
+
 function commandInstall(args) {
   const installer = require('./installer.js');
   const dryRun = args.includes('--dry-run');
@@ -4781,6 +4806,9 @@ Global session commands:
     Update session routing state (provider + target repo) without printing prompt.
   handoff
     Generate provider-ready handoff prompt from current session files.
+  guardrails convex <inventory|audit|status>
+    Convex Guard: which repositories hold Convex code, what each holds itself
+    to, and where they drift from the standard. Read-only.
   snapshot
     Capture git/session checkpoint under sessions/<TASK>/snapshots/<timestamp>/.
   doctor
@@ -4964,6 +4992,8 @@ function main(argv) {
       case 'reconcile':
         commandReconcile(gitRoot, args);
         break;
+      case 'guardrails':
+        return commandGuardrails(args);
       default:
         throw new Error(`Unknown command: ${command}`);
     }
