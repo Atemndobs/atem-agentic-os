@@ -2682,7 +2682,7 @@ function commandUrl(gitRoot, args) {
 
 // F.3: install ATEM's MCP server into each provider's config.
 /**
- * `atem guardrails <family> <verb>` — the Harness as control plane.
+ * `atem guardrails <family> <verb>`: the Harness as control plane.
  *
  * Read-only today: inventory, audit, status. `adopt` and `upgrade` write into
  * other repositories and are deliberately absent until they are reviewable on
