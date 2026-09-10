@@ -762,3 +762,15 @@ Success criteria:
 If this succeeds:
 
 the core MVP is validated.
+
+---
+
+# **Post-MVP Research: WebMCP Browser Adapter**
+
+Priority: Strategically high
+
+A bounded research spike is approved to expose read-only ATEM task and planning capabilities from the existing local atem web viewer to compatible browser agents. This does not change ATEM's local-first, provider-neutral, non-executing product definition.
+
+The first version may list tasks, read task context, search planning documents, compare snapshots, and prepare a visible handoff preview. It may not write state, execute commands, launch providers, change routes, or mutate repositories.
+
+Implementation specification: [WebMCP roadmap](./webmcp-roadmap.md)
