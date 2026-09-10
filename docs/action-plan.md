@@ -765,12 +765,21 @@ the core MVP is validated.
 
 ---
 
-# **Post-MVP Research: WebMCP Browser Adapter**
+# **Parallel Research: WebMCP Agentic Development Interface**
 
 Priority: Strategically high
+Does not block the core MVP
 
-A bounded research spike is approved to expose read-only ATEM task and planning capabilities from the existing local atem web viewer to compatible browser agents. This does not change ATEM's local-first, provider-neutral, non-executing product definition.
+A dual-surface WebMCP initiative is approved:
 
-The first version may list tasks, read task context, search planning documents, compare snapshots, and prepare a visible handoff preview. It may not write state, execute commands, launch providers, change routes, or mutate repositories.
+1. A comprehensive development-only interface that lets coding agents inspect, operate, and verify registered UI workflows without repeated DOM reconstruction.
+2. A separate, repository-specific production allowlist containing only explicitly approved user capabilities.
 
-Implementation specification: [WebMCP roadmap](./webmcp-roadmap.md)
+ATEM owns the shared mode, page-contract, result-envelope, registry-separation, audit, installation, and validation contracts. Each application owns its fixtures, routes, actions, authorization, and production tools.
+
+The first reference implementation will be Ops Central. RAP follows after its canonical implementation repository is confirmed. ATEM's own local viewer will implement the same contract without gaining autonomous execution, cloud state, or telemetry.
+
+Specifications:
+
+- [Agentic Development Contract](./webmcp-agentic-development-contract.md)
+- [ATEM WebMCP roadmap](./webmcp-roadmap.md)
