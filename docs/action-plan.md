@@ -762,3 +762,24 @@ Success criteria:
 If this succeeds:
 
 the core MVP is validated.
+
+---
+
+# **Parallel Research: WebMCP Agentic Development Interface**
+
+Priority: Strategically high
+Does not block the core MVP
+
+A dual-surface WebMCP initiative is approved:
+
+1. A comprehensive development-only interface that lets coding agents inspect, operate, and verify registered UI workflows without repeated DOM reconstruction.
+2. A separate, repository-specific production allowlist containing only explicitly approved user capabilities.
+
+ATEM owns the shared mode, page-contract, result-envelope, registry-separation, audit, installation, and validation contracts. Each application owns its fixtures, routes, actions, authorization, and production tools.
+
+The first reference implementation will be Ops Central. RAP follows after its canonical implementation repository is confirmed. ATEM's own local viewer will implement the same contract without gaining autonomous execution, cloud state, or telemetry.
+
+Specifications:
+
+- [Agentic Development Contract](./webmcp-agentic-development-contract.md)
+- [ATEM WebMCP roadmap](./webmcp-roadmap.md)
