@@ -4,108 +4,136 @@ Date: 2026-09-10
 Status: Approved for research spike
 Priority: Strategically high
 Task ID: TASK-WEBMCP-ATEM-001
+Related task: TASK-WEBMCP-AGENTIC-DEV-001
 
 ## Strategic fit
 
-ATEM already exposes provider-neutral task continuity through files, CLI commands, a local planning viewer, and a backend MCP server. WebMCP can make the active local browser surface agent-readable without DOM scraping while preserving ATEM as the source of continuity.
+ATEM has two roles in the WebMCP roadmap:
 
-This is a browser adapter, not a new orchestration runtime. It complements the existing stdio MCP server and must not create cloud state, telemetry, or autonomous execution.
+1. Provide structured tools for ATEM's own local planning viewer.
+2. Own the reusable agentic-development contract adopted by web application repositories.
 
-WebMCP is an evolving early-preview web standard. The adapter must be capability-detected and optional.
+The second role addresses an immediate engineering cost: coding agents repeatedly inspect screenshots, discover DOM structure, construct selectors, and script interactions to reproduce and verify UI changes. A development-only WebMCP catalogue can expose those capabilities semantically while production keeps a separate narrow allowlist.
+
+ATEM remains a local-first, provider-neutral continuity layer. WebMCP does not make ATEM an execution runtime, cloud service, or autonomous agent.
+
+Specifications:
+
+- [Agentic Development Contract](./webmcp-agentic-development-contract.md)
+- This document defines ATEM's own local viewer integration.
 
 Primary references:
 
 - https://github.com/webmachinelearning/webmcp
 - https://developer.chrome.com/blog/webmcp-epp
 
-## Pilot outcome
+## Operating modes
 
-When atem web is open on localhost in a compatible browser, a browser agent can inspect active ATEM tasks, read one task's approved context, search planning documents, and prepare a handoff plan. The visible viewer reflects the same selected task and evidence.
+The shared contract defines off, development, and production modes.
 
-## V1 tools
+For the ATEM repository:
+
+- off is the default.
+- development exposes the full viewer-development catalogue against local fixture/session roots.
+- production is not currently applicable because atem web is a local viewer, but the registry separation must still be implemented so the reference pattern is valid for adopting applications.
+
+Mode is server-derived. Browser controls may disable tools but cannot enable development mode.
+
+## ATEM local viewer tools
 
 | Tool | Type | Behavior |
 | --- | --- | --- |
 | list-atem-tasks | read | Return bounded active and recent tasks with status, provider, type, and repository |
-| get-task-context | read | Return the canonical brief, state, next steps, decisions, and validation summary for one task |
+| get-task-context | read | Return the canonical brief, state, next steps, decisions, and validation summary |
 | search-planning-docs | read | Search indexed planning documents with repository and document locators |
-| compare-task-snapshots | read | Return a bounded semantic or file-level comparison between two recorded snapshots |
-| prepare-handoff | prepare | Validate destination provider and repository, show the proposed handoff in the UI, and require the user to execute it manually |
+| compare-task-snapshots | read | Return a bounded semantic or file-level comparison between snapshots |
+| get-viewer-page-contract | development | Return the active viewer route, states, actions, invariants, and source locators |
+| load-viewer-test-scenario | development | Load an isolated viewer fixture |
+| reset-viewer-test-scenario | development | Reset the isolated fixture deterministically |
+| get-viewer-state | development | Return active selection, filters, search state, errors, and registered components |
+| navigate-viewer | development | Navigate using the viewer's own router |
+| check-viewer-overflow | development | Evaluate registered surfaces at approved viewport sizes |
+| run-viewer-accessibility-check | development | Run the approved accessibility checks |
+| prepare-handoff | prepare | Validate provider and repository and show a proposed handoff without executing it |
 
-Do not expose direct command execution, file writes, provider launch, route changes, repository mutation, shell access, or handoff execution in V1.
+No tool may execute shell commands, write files, launch providers, change routes, mutate repositories, or execute a handoff in the first implementation.
 
 ## Architecture
 
-Add a WebMCP adapter to the existing local web viewer.
+- Keep the existing viewer server and ATEM session files authoritative.
+- Implement the shared compatibility, mode, registry, result-envelope, audit, and page-contract interfaces.
+- Use existing ATEM resolvers and pure validation functions.
+- Do not read arbitrary paths supplied by a caller.
+- Resolve task IDs, repository paths, artifacts, and snapshots through existing allowlists.
+- Register only route-relevant tools and unregister them on navigation or shutdown.
+- Synchronize the visible viewer selection with successful tool calls.
+- Support cancellation for search and comparison work.
+- Disable cross-origin exposure.
 
-- The viewer's current server and session files remain authoritative.
-- WebMCP callbacks reuse existing read services and pure validation functions.
-- The adapter must not read arbitrary paths supplied by a tool caller.
-- Task IDs, repository paths, artifact names, and snapshot IDs are resolved through existing ATEM allowlists and URL rules.
-- Register only tools relevant to the current view and unregister them on navigation or shutdown.
-- Return compact structured results with stable IDs and local viewer links.
-- Update the visible task selection when a read or prepare tool succeeds.
-- Support cancellation for search and comparison work where possible.
-- No cross-origin tool exposure in V1.
+## Local security
 
-## Local security model
-
-- Bind to localhost using the existing viewer rules.
-- Treat planning documents, session text, tool descriptions, and tool results as untrusted content.
-- Never interpret document text as authorization to execute another tool.
+- Bind to localhost using existing viewer rules.
+- Development fixtures use explicit temporary roots.
+- Treat planning documents, session text, tool descriptions, and tool results as untrusted.
+- Never interpret document text as permission to invoke another tool.
 - Redact environment variables, credentials, provider tokens, and paths outside approved roots.
-- Enforce repository boundaries in code at invocation time.
-- Log bounded audit metadata locally: timestamp, tool, task ID, result class, and caller origin when available.
-- Do not retain full prompts or document bodies in the invocation log.
+- Log bounded local audit metadata without retaining full prompts or documents.
+- A WebMCP call gains no authority beyond the existing viewer server and repository boundary.
 
 ## Compatibility
 
 - Use document.modelContext only after feature detection.
-- Keep a small compatibility module so API changes are isolated.
-- Pin the tested browser build and WebMCP draft revision in the experiment manifest.
-- If the API is absent or changes, the existing atem web viewer works unchanged.
-- The existing stdio MCP tools remain the supported provider integration.
+- Isolate draft API changes inside the compatibility adapter.
+- Record the tested browser build and WebMCP draft revision.
+- If the API is absent or changes, atem web works unchanged.
+- The stdio MCP server remains the supported provider integration.
+- The shared contract remains usable by applications without an ATEM daemon.
 
 ## Evaluation
 
-Test at least:
+Test:
 
-- unsupported browser fallback
-- correct dynamic registration by route
+- unsupported-browser and off-mode fallback
+- dynamic registration by route and mode
 - path traversal and unknown task rejection
 - cross-repository boundary refusal
 - malicious instructions embedded in planning text
+- isolated fixture loading and deterministic reset
 - cancellation
-- logout is not applicable because the viewer is local, but closing or navigating removes tools
-- visible UI selection stays synchronized
-- prepare-handoff cannot execute a handoff
-- no network or telemetry is introduced
+- navigation cleanup
+- visible-state synchronization
+- prepare-handoff cannot execute
+- no network, cloud state, or telemetry introduced
 
-Compare WebMCP tool use with DOM-based browser navigation for task completion, wrong selections, steps, latency, and context size.
+Compare structured tool use with DOM-based viewer navigation for completion, wrong selections, steps, screenshots, retries, latency, and context size.
 
-## Delivery slices
+## Delivery sequence
 
-1. Record tested draft revision and browser implementation status.
-2. Add a disabled compatibility adapter with unit-test mocks.
-3. Implement list-atem-tasks and get-task-context.
-4. Add planning search and snapshot comparison.
-5. Add prepare-handoff as a visible, non-executing preview.
-6. Run adversarial boundary and prompt-injection tests.
-7. Run a local user study across at least three real tasks.
-8. Decide whether to retain, revise, or remove the adapter.
+1. Complete TASK-WEBMCP-AGENTIC-DEV-001 contract version 0.1.
+2. Add a disabled compatibility adapter and test doubles.
+3. Implement server-derived mode and separate registries.
+4. Instrument the ATEM viewer with page contracts.
+5. Implement task, context, search, and snapshot reads.
+6. Add viewer scenario, semantic-state, navigation, overflow, and accessibility tools.
+7. Add prepare-handoff as a visible non-executing preview.
+8. Run adversarial boundary and prompt-injection tests.
+9. Integrate the contract into Ops Central as the first application reference.
+10. Benchmark at least three real Ops Central UI tasks.
+11. Refine installation guidance before RAP adoption.
 
 ## Acceptance criteria
 
 - The default install and existing viewer behavior do not change.
-- No WebMCP code path runs when unsupported or disabled.
-- All file access uses existing ATEM resolvers and approved roots.
-- The agent sees only a small page-relevant toolset.
-- Tool output identifies its source task and repository.
-- The visible viewer and returned result refer to the same active task.
+- No WebMCP path runs when unsupported or disabled.
+- All access uses ATEM resolvers and approved roots.
+- Agents can operate instrumented viewer workflows without arbitrary selectors.
+- Tool output identifies its task, repository, page, and evidence.
+- Viewer state and tool results remain synchronized.
+- Fixture tools cannot address real session roots unless explicitly configured for read-only use.
 - prepare-handoff never writes state or launches a provider.
-- Tests prove traversal, boundary, and malicious-content refusals.
-- The spike adds no cloud service, telemetry, or background daemon.
+- Tests prove traversal, boundary, malicious-content, and mode-isolation refusals.
+- The work adds no cloud service, telemetry, or background daemon.
 
 ## Promotion gate
 
-Mutation or handoff execution may be considered only after the read-only pilot is reproducible, browser support is stable enough for CI, and a separate capability-and-confirmation design is approved.
+Any state mutation or handoff execution requires a separate capability-and-confirmation design after browser support, isolation, and the read/prepare pilot are proven.
