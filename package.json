@@ -8,7 +8,10 @@
     "atem": "bin/atem.js"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "ui:dev": "next dev",
+    "ui:build": "next build",
+    "ui:start": "next start"
   },
   "engines": {
     "node": ">=20"
@@ -36,5 +39,11 @@
     "mcp",
     "cli"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
 }
