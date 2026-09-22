@@ -25,8 +25,9 @@ export const DEFAULT_TIER_COST = {
 
 const JEV_INPUT_USD_PER_TOKEN = 0.042 / 1_000_000;
 
-// Measured from 67 real payloads on 2026-09-20: mean 291 est. tokens,
-// p50 234, p95 503. 300 is the honest default; raise it if your digests grow.
+// A digest of an opening request plus the two questions lands near 300 tokens
+// in practice. Raise this if your digests grow; `predict` prints the real mean
+// once you have sent anything.
 export function score(records, { tierCost = DEFAULT_TIER_COST, jevTokensPerCall = 300 } = {}) {
   const scored = records.filter((r) => r.jev?.tier && r.truth?.tier);
   const matrix = {};

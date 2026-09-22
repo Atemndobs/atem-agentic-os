@@ -44,9 +44,9 @@ function contentText(content) {
 }
 
 // Sessions started by another tool rather than by a person. ATEM would never
-// route these, so leaving them in swamps the dataset: on this machine they are
-// 89% of all sessions. Measured 2026-09-20, claude-mem's observer accounted for
-// 2,245 of 2,512 extracted sessions.
+// route these, so leaving them in swamps the dataset: an observer plugin can
+// easily account for the large majority of all sessions on a machine, which
+// buries the handful a person actually started.
 const SYNTHETIC_MARKERS = [
   "<observed_from_primary_session>",
   "You are a Claude-Mem",
@@ -134,8 +134,8 @@ async function parseSession(file) {
     if (rec.type !== "assistant" || rec.isSidechain) continue;
 
     // One API response is written as several records (one per content block),
-    // each repeating the same usage. Count usage once per message id or the
-    // totals inflate ~2.5x. Measured 2026-09-20: 109,286 records, 42,965 ids.
+    // each repeating the same usage. Count usage once per message id, or the
+    // totals inflate by roughly the average number of blocks per response.
     const m = rec.message || {};
     const mid = m.id || rec.requestId;
     const firstSight = !mid || !out.seenMessages.has(mid);
