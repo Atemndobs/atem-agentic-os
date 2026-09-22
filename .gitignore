@@ -4,3 +4,11 @@ node_modules/
 .harness/
 graphify-out/
 *.tgz
+
+# Local secrets. Never commit: this repo is public.
+.env
+.env.*
+
+# Backtest output: derived from real session transcripts and contains
+# the opening prompt of every session. Regenerate with `node backtest.mjs extract`.
+spikes/jev-backtest/out/
